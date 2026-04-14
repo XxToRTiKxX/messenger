@@ -1,0 +1,118 @@
+:3002 {
+    encode zstd gzip
+
+    route {
+        # API and OAuth must go to backend before static auth/app handlers
+        handle /api/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /admin/api/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/yandex {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/yandex/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/google {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/google/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/telegram/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/status {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/logout {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/providers {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/onboarding/credentials {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/onboarding/profile {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /health {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /assets/* {
+            root * /app/frontend/dist
+            try_files {path}
+            file_server
+        }
+
+        handle /ws* {
+            reverse_proxy 127.0.0.1:8000 {
+                header_up Upgrade {>Upgrade}
+                header_up Connection {>Connection}
+            }
+        }
+
+        handle_path /public/* {
+            root * /app/frontend/public
+            file_server
+        }
+
+        handle /login {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /auth/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /app {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle_path /invite/* {
+            redir /app/?invite={path} 302
+        }
+
+        handle /admin {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /admin/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        handle /app/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        # Root path follows backend auth/redirect logic
+        handle / {
+            reverse_proxy 127.0.0.1:8000
+        }
+
+        # Unknown web routes go to global fallback service
+        handle {
+            reverse_proxy host.docker.internal:9999
+        }
+    }
+}
