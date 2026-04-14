@@ -1,0 +1,238 @@
+import { useChatStore } from '../store/chatStore';
+import { Locale } from '../types/chat';
+
+type Dictionary = Record<string, string>;
+
+const dictionaries: Record<Locale, Dictionary> = {
+  ru: {
+    app_loading: 'Загрузка данных...',
+    app_retry: 'Нажмите, чтобы повторить',
+    chat_friends: 'Друзья',
+    chat_direct_fallback: 'диалог',
+    chat_subtitle_server_role: 'Matrix relay active · роль: {role}',
+    chat_subtitle_direct: 'Личный чат',
+    chat_subtitle_choose_friend: 'Выберите друга, чтобы открыть личные сообщения',
+    secure_channel: 'Защищенный канал',
+    channels: 'Каналы',
+    friends: 'Друзья',
+    add: 'Добавить',
+    add_server: 'Имя сервера',
+    add_channel: 'Имя канала',
+    server_unknown: 'Сервер',
+    server_label: 'Сервер',
+    server_actions: 'Действия сервера',
+    server_share: 'Поделиться',
+    invite_type: 'Ссылка приглашения',
+    invite_permanent: 'Постоянная ссылка',
+    invite_temporary: 'Временная ссылка (одноразовая)',
+    invite_copied: 'Ссылка скопирована в буфер обмена',
+    invite_copy_manual: 'Не удалось скопировать автоматически. Скопируйте ссылку вручную:',
+    invite_copy_prompt_opened: 'Открыл окно копирования ссылки',
+    invite_create_failed: 'Не удалось создать ссылку приглашения',
+    invite_title: 'Приглашение на сервер',
+    invite_server_label: 'Сервер',
+    invite_failed_load: 'Не удалось проверить приглашение',
+    invite_failed_accept: 'Не удалось принять приглашение',
+    invite_expired: 'Срок действия приглашения истек',
+    invite_wrong_user: 'Эта ссылка приглашения предназначена для другого пользователя',
+    invite_already_member: 'Вы уже участник этого сервера',
+    invite_joined: 'Вы успешно вступили в сервер',
+    invite_join_server: 'Вступить',
+    invite_open_server: 'Открыть сервер',
+    invite_inline_generic: 'приглашение на сервер',
+    invite_inline_server: 'приглашение на сервер {server}',
+    incoming: 'Входящие',
+    outgoing: 'Исходящие',
+    direct: 'Личные',
+    cat_info: 'Инфо',
+    cat_general: 'Общие',
+    cat_dev: 'Разработка',
+    cat_voice: 'Голос',
+    no_friends: 'Друзей пока нет',
+    accept: 'Принять',
+    reject: 'Отклонить',
+    settings: 'Настройки',
+    channel_members: 'Участники канала',
+    roles: 'Роли',
+    role_member: 'member',
+    select_chat_first: 'Сначала выберите чат',
+    direct_message: 'Личное сообщение',
+    message_channel: 'Сообщение в канал',
+    send: 'Отправить',
+    emoji_picker: 'Выбор эмодзи',
+    select_channel: 'Выберите канал',
+    select_friend: 'Выберите друга',
+    unread_messages: '{count} непрочитанных',
+    no_messages: 'Сообщений пока нет',
+    unknown_user: 'Неизвестный',
+    edited: 'изменено',
+    save: 'Сохранить',
+    link: 'ссылка',
+    edit: 'ред',
+    del: 'удл',
+    someone: 'Кто-то',
+    typing_single: '{name} печатает...',
+    typing_many: '{names}{extra} печатают...',
+    close_settings: 'Закрыть настройки',
+    close: 'Закрыть',
+    theme: 'Тема',
+    effects: 'Эффекты',
+    account: 'Аккаунт',
+    language: 'Язык',
+    language_option_ru: 'Русский',
+    language_option_en: 'English',
+    theme_mode: 'Режим темы',
+    theme_matrix: 'Matrix',
+    theme_dark: 'Dark',
+    glow_intensity: 'Интенсивность свечения: {value}',
+    visual_effects: 'Визуальные эффекты',
+    background_fx_enabled: 'Фоновая анимация',
+    background_fx_mode: 'Тип фона',
+    matrix_rain: 'Матричный дождь',
+    points_ambient: 'Точки (ambient)',
+    points_server: 'Точки (сервер)',
+    crt_effect: 'CRT эффект',
+    logout: 'Выйти',
+    day_label: '- {day} -'
+  },
+  en: {
+    app_loading: 'Loading data...',
+    app_retry: 'Click to retry',
+    chat_friends: 'Friends',
+    chat_direct_fallback: 'direct',
+    chat_subtitle_server_role: 'Matrix relay active · role: {role}',
+    chat_subtitle_direct: 'Direct chat',
+    chat_subtitle_choose_friend: 'Choose a friend to open direct messages',
+    secure_channel: 'Secure channel',
+    channels: 'Channels',
+    friends: 'Friends',
+    add: 'Add',
+    add_server: 'Server name',
+    add_channel: 'Channel name',
+    server_unknown: 'Server',
+    server_label: 'Server',
+    server_actions: 'Server actions',
+    server_share: 'Share',
+    invite_type: 'Invite link type',
+    invite_permanent: 'Permanent link',
+    invite_temporary: 'Temporary link (one-time)',
+    invite_copied: 'Invite link copied to clipboard',
+    invite_copy_manual: 'Could not copy automatically. Copy the link manually:',
+    invite_copy_prompt_opened: 'Manual copy dialog opened',
+    invite_create_failed: 'Failed to create invite link',
+    invite_title: 'Server invitation',
+    invite_server_label: 'Server',
+    invite_failed_load: 'Failed to validate invite',
+    invite_failed_accept: 'Failed to accept invite',
+    invite_expired: 'Invite link has expired',
+    invite_wrong_user: 'This invite is for a different user',
+    invite_already_member: 'You are already a member of this server',
+    invite_joined: 'You joined the server',
+    invite_join_server: 'Join server',
+    invite_open_server: 'Open server',
+    invite_inline_generic: 'server invitation',
+    invite_inline_server: 'server invitation {server}',
+    incoming: 'Incoming',
+    outgoing: 'Outgoing',
+    direct: 'Direct',
+    cat_info: 'Info',
+    cat_general: 'General',
+    cat_dev: 'Dev',
+    cat_voice: 'Voice',
+    no_friends: 'No friends yet',
+    accept: 'Accept',
+    reject: 'Reject',
+    settings: 'Settings',
+    channel_members: 'Channel Members',
+    roles: 'Roles',
+    role_member: 'member',
+    select_chat_first: 'Select chat first',
+    direct_message: 'Direct message',
+    message_channel: 'Message channel',
+    send: 'Send',
+    emoji_picker: 'Emoji Picker',
+    select_channel: 'Select a channel',
+    select_friend: 'Select a friend',
+    unread_messages: '{count} unread messages',
+    no_messages: 'No messages yet',
+    unknown_user: 'Unknown',
+    edited: 'edited',
+    save: 'Save',
+    link: 'link',
+    edit: 'edit',
+    del: 'del',
+    someone: 'Someone',
+    typing_single: '{name} is typing...',
+    typing_many: '{names}{extra} are typing...',
+    close_settings: 'Close settings',
+    close: 'Close',
+    theme: 'Theme',
+    effects: 'Effects',
+    account: 'Account',
+    language: 'Language',
+    language_option_ru: 'Русский',
+    language_option_en: 'English',
+    theme_mode: 'Theme Mode',
+    theme_matrix: 'Matrix',
+    theme_dark: 'Dark',
+    glow_intensity: 'Glow Intensity: {value}',
+    visual_effects: 'Visual Effects',
+    background_fx_enabled: 'Background animation',
+    background_fx_mode: 'Background mode',
+    matrix_rain: 'Matrix Rain',
+    points_ambient: 'Points (ambient)',
+    points_server: 'Points (server)',
+    crt_effect: 'CRT Effect',
+    logout: 'Logout',
+    day_label: '- {day} -'
+  }
+};
+
+const localeMap: Record<Locale, string> = {
+  ru: 'ru-RU',
+  en: 'en-US'
+};
+
+const interpolate = (template: string, vars?: Record<string, string | number>): string => {
+  if (!vars) return template;
+  return Object.entries(vars).reduce((acc, [key, value]) => acc.replaceAll(`{${key}}`, String(value)), template);
+};
+
+export const formatTimeByLocale = (timestamp: number, locale: Locale): string =>
+  new Intl.DateTimeFormat(localeMap[locale], {
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(timestamp);
+
+export const formatDayTimeByLocale = (timestamp: number, locale: Locale): string =>
+  new Intl.DateTimeFormat(localeMap[locale], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(timestamp);
+
+export const formatDayLabelByLocale = (timestamp: number, locale: Locale): string =>
+  new Intl.DateTimeFormat(localeMap[locale], {
+    month: 'long',
+    day: 'numeric'
+  }).format(timestamp);
+
+export const useI18n = () => {
+  const locale = useChatStore((state) => state.locale);
+
+  const t = (key: string, vars?: Record<string, string | number>): string => {
+    const dict = dictionaries[locale];
+    const fallback = dictionaries.en;
+    const phrase = dict[key] || fallback[key] || key;
+    return interpolate(phrase, vars);
+  };
+
+  return {
+    locale,
+    t,
+    formatTime: (timestamp: number) => formatTimeByLocale(timestamp, locale),
+    formatDayTime: (timestamp: number) => formatDayTimeByLocale(timestamp, locale),
+    formatDayLabel: (timestamp: number) => formatDayLabelByLocale(timestamp, locale)
+  };
+};
