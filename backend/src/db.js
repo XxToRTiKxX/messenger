@@ -1,7 +1,9 @@
 const { Pool } = require('pg');
+const config = require('./config');
 const logger = require('./utils/logger');
 const createWorkspaceModule = require('./db-modules/workspace');
 const createMessageSchemaModule = require('./db-modules/messages');
+const { createMessageCrypto } = require('./server-modules/messageCrypto');
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://messenger:messenger@db:5432/messenger';
 
@@ -22,6 +24,7 @@ async function query(text, params = []) {
 
 const workspace = createWorkspaceModule({ query, DEFAULT_SERVER_ID, DEFAULT_CHANNEL_ID });
 const messageSchema = createMessageSchemaModule({ query, DEFAULT_SERVER_ID, DEFAULT_CHANNEL_ID });
+const messageCrypto = createMessageCrypto(config, logger);
 
 async function initDatabase() {
   await query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
@@ -103,6 +106,42 @@ async function initDatabase() {
   await messageSchema.createDirectMessagesSchema();
   await messageSchema.migrateMessageLifecycleFields();
   await messageSchema.createReactionsSchema();
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS media_files (
+      id UUID PRIMARY KEY,
+      owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      peer_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      server_id UUID REFERENCES servers(id) ON DELETE SET NULL,
+      channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      original_size BIGINT NOT NULL,
+      compressed_size BIGINT NOT NULL,
+      storage_path TEXT NOT NULL,
+      encryption_iv BYTEA NOT NULL,
+      encryption_tag BYTEA NOT NULL,
+      encryption_algo TEXT NOT NULL DEFAULT 'aes-256-gcm',
+      compression_algo TEXT NOT NULL DEFAULT 'gzip',
+      is_committed BOOLEAN NOT NULL DEFAULT FALSE,
+      committed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await query('ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_id UUID REFERENCES media_files(id) ON DELETE SET NULL;');
+  await query('ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS media_id UUID REFERENCES media_files(id) ON DELETE SET NULL;');
+  await query('CREATE INDEX IF NOT EXISTS idx_media_files_server_channel ON media_files(server_id, channel_id, created_at DESC);');
+  await query('CREATE INDEX IF NOT EXISTS idx_media_files_dm_context ON media_files(owner_user_id, peer_user_id, created_at DESC);');
+  await query('CREATE INDEX IF NOT EXISTS idx_messages_media_id ON messages(media_id);');
+  await query('CREATE INDEX IF NOT EXISTS idx_direct_messages_media_id ON direct_messages(media_id);');
+
+  if (config.message.migrateOnStart) {
+    const migrated = await messageCrypto.migrateStoredMessages(query, { batchSize: 200 });
+    if (migrated > 0) {
+      logger.info('Message encryption migration completed', { migrated });
+    }
+  }
 
   logger.info('Database initialized');
 }

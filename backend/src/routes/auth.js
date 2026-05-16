@@ -9,12 +9,14 @@ const logger = require('../utils/logger');
 const { optionalAuth } = require('../middleware/auth');
 const createAuthUsers = require('./auth-modules/users');
 const {
+  getBaseUrl,
   getRedirectUri,
   createOnboardingToken,
   verifyOnboardingToken,
   setAuthCookie,
   telegramDataIsValid
 } = require('./auth-modules/helpers');
+const { revokeToken } = require('../server-modules/tokenRevocation');
 
 const router = express.Router();
 
@@ -70,6 +72,76 @@ router.get('/providers', (req, res) => {
       botUsername: config.telegram.botUsername || null
     }
   });
+});
+
+router.get('/telegram', (req, res) => {
+  if (!config.telegram.botToken) {
+    return res.status(500).json({ error: 'Telegram OAuth not configured' });
+  }
+
+  const botId = String(config.telegram.botToken).split(':')[0];
+  if (!/^\d+$/.test(botId)) {
+    return res.status(500).json({ error: 'Telegram bot token is invalid' });
+  }
+
+  const baseUrl = getBaseUrl(req);
+  const origin = (req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+  const returnTo = `${baseUrl}/auth/telegram/callback`;
+  const authUrl =
+    `https://oauth.telegram.org/auth?bot_id=${encodeURIComponent(botId)}` +
+    `&origin=${encodeURIComponent(origin)}` +
+    `&return_to=${encodeURIComponent(returnTo)}` +
+    '&request_access=write';
+
+  return res.redirect(authUrl);
+});
+
+router.post('/login', async (req, res) => {
+  try {
+    const username = String(req.body?.username || '').trim();
+    const password = String(req.body?.password || '');
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Укажите логин и пароль' });
+    }
+
+    const user = await getUserByUsername(username);
+    if (!user || !user.passwordHash) {
+      return res.status(401).json({ error: 'Неверный логин или пароль' });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
+    if (!isValidPassword) {
+      return res.status(401).json({ error: 'Неверный логин или пароль' });
+    }
+
+    if (user.registrationStatus === 'pending') {
+      return res.status(403).json({ error: 'Заявка ожидает подтверждения администратора' });
+    }
+    if (user.registrationStatus === 'rejected') {
+      return res.status(403).json({ error: 'Заявка отклонена администратором' });
+    }
+    if (!user.isApproved || user.registrationStatus !== 'active') {
+      return res.status(403).json({ error: 'Профиль еще не активирован' });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        username: user.username,
+        email: user.email
+      },
+      config.jwt.secret,
+      { expiresIn: config.jwt.expiresIn }
+    );
+
+    await ensureDefaultWorkspaceForUser(user.id);
+    setAuthCookie(res, token, config);
+    return res.json({ success: true });
+  } catch (err) {
+    logger.error('Local auth error', { error: err.message });
+    return res.status(500).json({ error: 'Ошибка авторизации' });
+  }
 });
 
 router.post('/onboarding/credentials', async (req, res) => {
@@ -305,6 +377,14 @@ router.get('/telegram/callback', optionalAuth, async (req, res) => {
 });
 
 router.post('/logout', (req, res) => {
+  const token =
+    (req.signedCookies && req.signedCookies.auth_token) ||
+    (req.cookies && req.cookies.auth_token) ||
+    null;
+  if (token) {
+    revokeToken(token);
+  }
+
   const cookieBase = {
     httpOnly: true,
     secure: config.cookie.secure,

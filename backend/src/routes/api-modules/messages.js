@@ -1,13 +1,98 @@
 const createReactionHelpers = require('./reactions');
 
 function registerMessageRoutes(router, deps) {
-  const { authenticateToken, query, logger, shared, uuidv4, broadcastMessage, defaults } = deps;
+  const { authenticateToken, query, logger, shared, uuidv4, broadcastMessage, defaults, messageCrypto } = deps;
   const { ensureUserHasServerAccess, areUsersFriends } = shared;
   const { DEFAULT_SERVER_ID, DEFAULT_CHANNEL_ID } = defaults;
   const { loadMessageReactionsByIds, enrichMessagesWithReactions } = createReactionHelpers(query);
   const DELETED_CONTENT = 'deleted';
+  const decryptReplyPreview = (row) => {
+    const replyId = row?.replyToMessageId;
+    if (!replyId) return null;
+    try {
+      const decrypted = messageCrypto.decryptContent(row.replyToContent || '', 'server', {
+        messageId: replyId,
+        serverId: row.replyToServerId,
+        channelId: row.replyToChannelId,
+        userId: row.replyToUserId,
+        createdAt: row.replyToCreatedAt,
+        type: row.replyToDeletedAt ? 'server_deleted' : 'server_message'
+      });
+      return {
+        id: replyId,
+        username: row.replyToUsername || 'Unknown',
+        content: String(decrypted || '').slice(0, 220)
+      };
+    } catch {
+      return {
+        id: replyId,
+        username: row.replyToUsername || 'Unknown',
+        content: '[message unavailable]'
+      };
+    }
+  };
+  const decryptServerMessage = (row) => {
+    try {
+      return {
+        ...row,
+        media: mapMedia(row),
+        replyTo: decryptReplyPreview(row),
+        content: messageCrypto.decryptContent(row.content, 'server', {
+          messageId: row.id,
+          serverId: row.serverId,
+          channelId: row.channelId,
+          userId: row.userId,
+          createdAt: row.timestamp,
+          type: row.deletedAt ? 'server_deleted' : 'server_message'
+        })
+      };
+    } catch (error) {
+      logger.warn('Message decryption failed, returning placeholder', {
+        messageId: row?.id || null,
+        serverId: row?.serverId || null,
+        channelId: row?.channelId || null,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      return {
+        ...row,
+        media: mapMedia(row),
+        replyTo: decryptReplyPreview(row),
+        content: '[message unavailable]'
+      };
+    }
+  };
+  const mapMedia = (row) => {
+    if (!row?.mediaId) return null;
+    return {
+      id: row.mediaId,
+      fileName: row.mediaName,
+      mimeType: row.mediaMimeType,
+      sizeBytes: Number(row.mediaSize || 0),
+      url: `/api/media/${row.mediaId}`
+    };
+  };
 
   const readEmoji = (raw) => String(raw || '').trim().slice(0, 24);
+  const loadReplyPreviewByMessageId = async (messageId) => {
+    const result = await query(
+      `SELECT rm.id AS "replyToMessageId",
+              rm.content AS "replyToContent",
+              rm.server_id AS "replyToServerId",
+              rm.channel_id AS "replyToChannelId",
+              rm.user_id AS "replyToUserId",
+              rm.created_at AS "replyToCreatedAt",
+              rm.deleted_at AS "replyToDeletedAt",
+              ru.username AS "replyToUsername"
+       FROM messages m
+       LEFT JOIN messages rm ON rm.id = m.reply_to_message_id
+       LEFT JOIN users ru ON ru.id = rm.user_id
+       WHERE m.id = $1
+       LIMIT 1`,
+      [messageId]
+    );
+    return decryptReplyPreview(result.rows[0] || {});
+  };
 
   router.get('/messages', authenticateToken, async (req, res) => {
     const serverId = String(req.query?.serverId || DEFAULT_SERVER_ID);
@@ -38,11 +123,26 @@ function registerMessageRoutes(router, deps) {
                 m.server_id AS "serverId",
                 m.channel_id AS "channelId",
                 m.content,
+                m.media_id AS "mediaId",
+                mf.original_name AS "mediaName",
+                mf.mime_type AS "mediaMimeType",
+                mf.original_size AS "mediaSize",
+                rm.id AS "replyToMessageId",
+                rm.content AS "replyToContent",
+                rm.server_id AS "replyToServerId",
+                rm.channel_id AS "replyToChannelId",
+                rm.user_id AS "replyToUserId",
+                rm.created_at AS "replyToCreatedAt",
+                rm.deleted_at AS "replyToDeletedAt",
+                ru.username AS "replyToUsername",
                 m.created_at AS "timestamp",
                 m.edited_at AS "editedAt",
                 m.deleted_at AS "deletedAt"
          FROM messages m
          JOIN users u ON u.id = m.user_id
+         LEFT JOIN media_files mf ON mf.id = m.media_id
+         LEFT JOIN messages rm ON rm.id = m.reply_to_message_id
+         LEFT JOIN users ru ON ru.id = rm.user_id
          WHERE m.server_id = $1
            AND m.channel_id = $2
          ORDER BY m.created_at DESC
@@ -50,7 +150,8 @@ function registerMessageRoutes(router, deps) {
         [serverId, channelId]
       );
 
-      const messages = await enrichMessagesWithReactions(result.rows.reverse(), loadMessageReactionsByIds);
+      const decryptedRows = result.rows.reverse().map(decryptServerMessage);
+      const messages = await enrichMessagesWithReactions(decryptedRows, loadMessageReactionsByIds);
       return res.json(messages);
     } catch (err) {
       logger.error('Messages fetch failed', {
@@ -59,17 +160,27 @@ function registerMessageRoutes(router, deps) {
         serverId,
         channelId
       });
+      if (err && err.code === 'DECRYPTION_FAILED') {
+        logger.warn('Messages fetch fallback to empty list due to decryption failure', {
+          userId: req.user.userId,
+          serverId,
+          channelId
+        });
+        return res.json([]);
+      }
       return res.status(500).json({ error: 'Failed to load messages' });
     }
   });
 
   router.post('/messages', authenticateToken, async (req, res) => {
-    const { content } = req.body || {};
+    const content = String(req.body?.content || '').trim();
+    const mediaId = String(req.body?.mediaId || '').trim() || null;
+    const replyToMessageId = String(req.body?.replyToMessageId || '').trim() || null;
     const serverId = String(req.body?.serverId || DEFAULT_SERVER_ID);
     const channelId = String(req.body?.channelId || DEFAULT_CHANNEL_ID);
 
-    if (!content || typeof content !== 'string' || content.trim().length === 0) {
-      return res.status(400).json({ error: 'Message content required' });
+    if (!content && !mediaId) {
+      return res.status(400).json({ error: 'Message content or media required' });
     }
     if (content.length > 1000) {
       return res.status(400).json({ error: 'Message too long (max 1000 chars)' });
@@ -79,6 +190,12 @@ function registerMessageRoutes(router, deps) {
       const serverRole = await ensureUserHasServerAccess(serverId, req.user.userId);
       if (!serverRole) {
         return res.status(403).json({ error: 'No access to this server' });
+      }
+      if (serverId === DEFAULT_SERVER_ID && channelId === DEFAULT_CHANNEL_ID && !['creator', 'admin'].includes(serverRole)) {
+        return res.status(403).json({ error: 'Этот канал доступен только для чтения' });
+      }
+      if (serverId === DEFAULT_SERVER_ID && channelId === DEFAULT_CHANNEL_ID && replyToMessageId) {
+        return res.status(403).json({ error: 'Ответы отключены в этом канале' });
       }
 
       const channelCheck = await query(
@@ -102,24 +219,121 @@ function registerMessageRoutes(router, deps) {
         return res.status(404).json({ error: 'User not found' });
       }
 
+      let media = null;
+      if (mediaId) {
+        const mediaCheck = await query(
+          `SELECT id AS "mediaId",
+                  original_name AS "mediaName",
+                  mime_type AS "mediaMimeType",
+                  original_size AS "mediaSize"
+           FROM media_files
+           WHERE id = $1
+             AND owner_user_id = $2
+             AND server_id = $3
+             AND channel_id = $4
+             AND is_committed = FALSE
+           LIMIT 1`,
+          [mediaId, req.user.userId, serverId, channelId]
+        );
+        media = mapMedia(mediaCheck.rows[0]);
+        if (!media) {
+          return res.status(400).json({ error: 'Invalid media reference for message' });
+        }
+      }
+
+      let replyTarget = null;
+      if (replyToMessageId) {
+        const replyCheck = await query(
+          `SELECT m.id,
+                  m.server_id AS "serverId",
+                  m.channel_id AS "channelId",
+                  m.user_id AS "userId",
+                  m.content,
+                  m.created_at AS "timestamp",
+                  m.deleted_at AS "deletedAt",
+                  u.username
+           FROM messages m
+           JOIN users u ON u.id = m.user_id
+           WHERE m.id = $1
+             AND m.server_id = $2
+             AND m.channel_id = $3
+           LIMIT 1`,
+          [replyToMessageId, serverId, channelId]
+        );
+        replyTarget = replyCheck.rows[0] || null;
+        if (!replyTarget) {
+          return res.status(400).json({ error: 'Reply target not found in this channel' });
+        }
+      }
+
       const messageId = uuidv4();
+      const createdAt = new Date().toISOString();
+      const encryptedContent = messageCrypto.encryptContent(content, 'server', {
+        messageId,
+        serverId,
+        channelId,
+        userId: req.user.userId,
+        createdAt,
+        type: 'server_message'
+      });
+
       const inserted = await query(
-        `INSERT INTO messages (id, user_id, server_id, channel_id, content)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO messages (id, user_id, server_id, channel_id, content, media_id, reply_to_message_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id,
                    user_id AS "userId",
                    server_id AS "serverId",
                    channel_id AS "channelId",
                    content,
+                   media_id AS "mediaId",
+                   reply_to_message_id AS "replyToMessageId",
                    created_at AS "timestamp",
                    edited_at AS "editedAt",
                    deleted_at AS "deletedAt"`,
-        [messageId, req.user.userId, serverId, channelId, content.trim()]
+        [messageId, req.user.userId, serverId, channelId, encryptedContent, mediaId, replyToMessageId, createdAt]
       );
 
+      if (mediaId) {
+        await query(
+          `UPDATE media_files
+           SET is_committed = TRUE,
+               committed_at = NOW()
+           WHERE id = $1`,
+          [mediaId]
+        );
+      }
+
+      let replyPreview = null;
+      if (replyTarget) {
+        try {
+          replyPreview = {
+            id: replyTarget.id,
+            username: replyTarget.username,
+            content: String(
+              messageCrypto.decryptContent(replyTarget.content, 'server', {
+                messageId: replyTarget.id,
+                serverId: replyTarget.serverId,
+                channelId: replyTarget.channelId,
+                userId: replyTarget.userId,
+                createdAt: replyTarget.timestamp,
+                type: replyTarget.deletedAt ? 'server_deleted' : 'server_message'
+              })
+            ).slice(0, 220)
+          };
+        } catch {
+          replyPreview = {
+            id: replyTarget.id,
+            username: replyTarget.username,
+            content: '[message unavailable]'
+          };
+        }
+      }
+
       const message = {
-        ...inserted.rows[0],
+        ...decryptServerMessage(inserted.rows[0]),
         username: userResult.rows[0].username,
+        replyTo: replyPreview,
+        media,
         reactions: []
       };
 
@@ -157,9 +371,15 @@ function registerMessageRoutes(router, deps) {
                 m.server_id AS "serverId",
                 m.channel_id AS "channelId",
                 m.deleted_at AS "deletedAt",
+                m.created_at AS "timestamp",
+                m.media_id AS "mediaId",
+                mf.original_name AS "mediaName",
+                mf.mime_type AS "mediaMimeType",
+                mf.original_size AS "mediaSize",
                 u.username
          FROM messages m
          JOIN users u ON u.id = m.user_id
+         LEFT JOIN media_files mf ON mf.id = m.media_id
          WHERE m.id = $1
          LIMIT 1`,
         [messageId]
@@ -180,6 +400,15 @@ function registerMessageRoutes(router, deps) {
         return res.status(409).json({ error: 'Deleted messages cannot be edited' });
       }
 
+      const encryptedContent = messageCrypto.encryptContent(content, 'server', {
+        messageId,
+        serverId: target.serverId,
+        channelId: target.channelId,
+        userId: target.userId,
+        createdAt: target.timestamp,
+        type: 'server_message'
+      });
+
       const updated = await query(
         `UPDATE messages
          SET content = $2,
@@ -190,15 +419,18 @@ function registerMessageRoutes(router, deps) {
                    server_id AS "serverId",
                    channel_id AS "channelId",
                    content,
+                   media_id AS "mediaId",
                    created_at AS "timestamp",
                    edited_at AS "editedAt",
                    deleted_at AS "deletedAt"`,
-        [messageId, content]
+        [messageId, encryptedContent]
       );
 
       const messageBase = {
-        ...updated.rows[0],
-        username: target.username
+        ...decryptServerMessage(updated.rows[0]),
+        username: target.username,
+        media: mapMedia(target),
+        replyTo: await loadReplyPreviewByMessageId(messageId)
       };
       const [message] = await enrichMessagesWithReactions([messageBase], loadMessageReactionsByIds);
 
@@ -226,9 +458,15 @@ function registerMessageRoutes(router, deps) {
                 m.user_id AS "userId",
                 m.server_id AS "serverId",
                 m.channel_id AS "channelId",
+                m.created_at AS "timestamp",
+                m.media_id AS "mediaId",
+                mf.original_name AS "mediaName",
+                mf.mime_type AS "mediaMimeType",
+                mf.original_size AS "mediaSize",
                 u.username
          FROM messages m
          JOIN users u ON u.id = m.user_id
+         LEFT JOIN media_files mf ON mf.id = m.media_id
          WHERE m.id = $1
          LIMIT 1`,
         [messageId]
@@ -246,6 +484,15 @@ function registerMessageRoutes(router, deps) {
         return res.status(403).json({ error: 'Cannot delete this message' });
       }
 
+      const encryptedDeletedContent = messageCrypto.encryptContent(DELETED_CONTENT, 'server', {
+        messageId,
+        serverId: target.serverId,
+        channelId: target.channelId,
+        userId: target.userId,
+        createdAt: target.timestamp,
+        type: 'server_deleted'
+      });
+
       const deleted = await query(
         `UPDATE messages
          SET content = $2,
@@ -256,15 +503,18 @@ function registerMessageRoutes(router, deps) {
                    server_id AS "serverId",
                    channel_id AS "channelId",
                    content,
+                   media_id AS "mediaId",
                    created_at AS "timestamp",
                    edited_at AS "editedAt",
                    deleted_at AS "deletedAt"`,
-        [messageId, DELETED_CONTENT]
+        [messageId, encryptedDeletedContent]
       );
 
       const messageBase = {
-        ...deleted.rows[0],
-        username: target.username
+        ...decryptServerMessage(deleted.rows[0]),
+        username: target.username,
+        media: mapMedia(target),
+        replyTo: await loadReplyPreviewByMessageId(messageId)
       };
       const [message] = await enrichMessagesWithReactions([messageBase], loadMessageReactionsByIds);
 

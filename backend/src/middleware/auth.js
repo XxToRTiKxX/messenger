@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 const logger = require('../utils/logger');
+const { isTokenRevoked } = require('../server-modules/tokenRevocation');
 
 function authenticateToken(req, res, next) {
   logger.debug('Authentication middleware called', {
@@ -26,6 +27,13 @@ function authenticateToken(req, res, next) {
       userAgent: req.get('User-Agent')
     });
     return res.status(401).json({ error: 'Access token required' });
+  }
+
+  if (isTokenRevoked(token)) {
+    logger.warn('Revoked token used', {
+      ip: req.ip
+    });
+    return res.status(401).json({ error: 'Session revoked' });
   }
   
   try {
@@ -62,6 +70,9 @@ function optionalAuth(req, res, next) {
   }
   
   if (token) {
+    if (isTokenRevoked(token)) {
+      return next();
+    }
     try {
       const decoded = jwt.verify(token, config.jwt.secret);
       req.user = decoded;

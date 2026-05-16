@@ -1,8 +1,16 @@
 import type { AuthProviders } from './types';
 import type { AuthUI } from './ui';
+import { wsJsonRequest } from '../../services/wsRequest';
 
 export function renderTelegramWidget(ui: AuthUI, botUsername: string): void {
-  ui.telegramContainer.innerHTML = '';
+  ui.telegramContainer.innerHTML = `
+    <span class="telegram-button-shell">Войти через Telegram</span>
+    <div id="telegram-widget-hitbox" class="telegram-widget-hitbox" aria-hidden="true"></div>
+  `;
+  ui.telegramContainer.title = `Вход через @${botUsername}`;
+  const hitbox = ui.telegramContainer.querySelector<HTMLDivElement>('#telegram-widget-hitbox');
+  if (!hitbox) return;
+
   const script = document.createElement('script');
   script.async = true;
   script.src = 'https://telegram.org/js/telegram-widget.js?22';
@@ -11,15 +19,16 @@ export function renderTelegramWidget(ui: AuthUI, botUsername: string): void {
   script.setAttribute('data-auth-url', '/auth/telegram/callback');
   script.setAttribute('data-request-access', 'write');
   script.setAttribute('data-radius', '10');
-  ui.telegramContainer.appendChild(script);
+  hitbox.appendChild(script);
 }
 
 export async function initProviders(ui: AuthUI): Promise<void> {
   try {
-    const response = await fetch('/auth/providers', {
-      headers: { Accept: 'application/json' }
-    });
-    const providers = (await response.json()) as AuthProviders;
+    const response = await wsJsonRequest<AuthProviders>('/auth/providers');
+    if (!response.ok || !response.data) {
+      throw new Error(response.error || `HTTP ${response.status}`);
+    }
+    const providers = response.data;
 
     if (!providers.yandex?.enabled) {
       ui.loginButton.disabled = true;

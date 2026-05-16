@@ -4,7 +4,7 @@
     "useDefineForClassFields": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
-    "types": ["vite/client", "react", "react-dom"],
+    "types": ["vite/client", "react", "react-dom", "vitest/globals"],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": false,
@@ -20,5 +20,5 @@
     "noUncheckedIndexedAccess": true,
     "baseUrl": "."
   },
-  "include": ["src"]
+  "include": ["src", "tests", "vitest.config.ts"]
 }

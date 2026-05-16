@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Message, User } from '../../types/chat';
 import { shouldGroupWithPrevious } from '../../utils/helpers';
 import { useChatStore } from '../../store/chatStore';
@@ -65,9 +66,24 @@ const parseMessageContent = (text: string): ParsedPart[] =>
     return [parseLinkPart(part)];
   });
 
+const formatBytes = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+};
+
 export const MessageItem = ({ message, previous, author, isOwn }: Props) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
+  const [mediaLoaded, setMediaLoaded] = useState(true);
+  const [menu, setMenu] = useState<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 });
+  const [menuStatus, setMenuStatus] = useState('');
   const [inviteServerNames, setInviteServerNames] = useState<Record<string, string>>({});
   const [messageLinkPreviews, setMessageLinkPreviews] = useState<Record<string, MessageLinkPayload>>({});
   const editMessage = useChatStore((state) => state.editMessage);
@@ -75,16 +91,21 @@ export const MessageItem = ({ message, previous, author, isOwn }: Props) => {
   const toggleReaction = useChatStore((state) => state.toggleReaction);
   const resolveMessageLink = useChatStore((state) => state.resolveMessageLink);
   const openInviteDialog = useChatStore((state) => state.openInviteDialog);
+  const setReplyTarget = useChatStore((state) => state.setReplyTarget);
   const chatMode = useChatStore((state) => state.chatMode);
   const servers = useChatStore((state) => state.servers);
   const channels = useChatStore((state) => state.channels);
+  const currentServerId = useChatStore((state) => state.currentServerId);
+  const currentChannelId = useChatStore((state) => state.currentChannelId);
   const currentUserId = useChatStore((state) => state.currentUserId);
+  const autoLoadMedia = useChatStore((state) => state.autoLoadMedia);
   const focusedMessageId = useChatStore((state) => state.focusedMessageId);
   const focusedMessageAnimated = useChatStore((state) => state.focusedMessageAnimated);
   const { t, formatTime, formatDayTime } = useI18n();
   const itemRef = useRef<HTMLElement | null>(null);
 
   const grouped = useMemo(() => shouldGroupWithPrevious(previous, message), [previous, message]);
+  const isPendingUpload = Boolean(message.localOnly);
   const isFocused = focusedMessageId === message.id;
   const linkedParts = useMemo(() => parseMessageContent(message.content), [message.content]);
   const inviteCodes = useMemo(
@@ -113,10 +134,27 @@ export const MessageItem = ({ message, previous, author, isOwn }: Props) => {
     () => quickReactions.filter((emoji) => !message.reactions.some((reaction) => reaction.emoji === emoji)),
     [message.reactions]
   );
+  const currentServer = useMemo(
+    () => servers.find((server) => server.id === currentServerId),
+    [currentServerId, servers]
+  );
+  const currentChannel = useMemo(
+    () => channels.find((channel) => channel.id === currentChannelId),
+    [channels, currentChannelId]
+  );
+  const replyDisabledForCurrentContext = useMemo(() => {
+    if (!currentServer || !currentChannel) return false;
+    if (currentServer.name !== 'Adaptivity') return false;
+    return currentChannel.type === 'text' && currentChannel.position === 0;
+  }, [currentChannel, currentServer]);
 
   useEffect(() => {
     setDraft(message.content);
   }, [message.content]);
+
+  useEffect(() => {
+    setMediaLoaded(autoLoadMedia);
+  }, [autoLoadMedia, message.id]);
 
   useEffect(() => {
     if (!isFocused || !itemRef.current) return;
@@ -208,6 +246,20 @@ export const MessageItem = ({ message, previous, author, isOwn }: Props) => {
     };
   }, [messageLinkIds]);
 
+  useEffect(() => {
+    if (!menu.open) return;
+    const close = () => setMenu((prev) => ({ ...prev, open: false }));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menu.open]);
+
   const handleSave = async (): Promise<void> => {
     const trimmed = draft.trim();
     if (!trimmed || trimmed === message.content) {
@@ -218,10 +270,39 @@ export const MessageItem = ({ message, previous, author, isOwn }: Props) => {
     setEditing(false);
   };
 
+  const closeMenu = () => setMenu((prev) => ({ ...prev, open: false }));
+
+  const copyMessageLink = async () => {
+    if (chatMode === 'friend') return;
+    const url = `${window.location.origin}/app/?m=${encodeURIComponent(message.id)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setMenuStatus(t('invite_copied'));
+    } catch {
+      setMenuStatus('Не удалось скопировать ссылку');
+    }
+    closeMenu();
+  };
+
+  const handleReply = () => {
+    if (replyDisabledForCurrentContext) return;
+    setReplyTarget(message.channelId, {
+      id: message.id,
+      username: author?.displayName || t('unknown_user'),
+      content: message.content
+    });
+    closeMenu();
+  };
+
   return (
     <article
       ref={itemRef}
       id={`message-${message.id}`}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenu({ open: true, x: event.clientX, y: event.clientY });
+        setMenuStatus('');
+      }}
       className={`group rounded-lg border-l px-3 py-2 transition hover:bg-panel/50 ${
         grouped ? 'border-transparent' : 'border-borderGlow'
       } ${isFocused ? 'ring-1 ring-accent/80 bg-accent/5' : ''}`}
@@ -259,76 +340,137 @@ export const MessageItem = ({ message, previous, author, isOwn }: Props) => {
               </button>
             </div>
           ) : (
-            <p className={`whitespace-pre-wrap break-words text-sm leading-6 ${message.deletedAt ? 'italic text-textMuted/60' : 'text-text'}`}>
-              {linkedParts.map((part, index) => {
-                if (part.type === 'text') {
-                  return <span key={`text-${message.id}-${index}`}>{part.value}</span>;
-                }
+            <div>
+              {message.replyTo && (
+                <button
+                  type="button"
+                  onClick={() => void resolveMessageLink(message.replyTo?.id || '', { animateInCurrentChat: true })}
+                  className="mb-1 inline-flex max-w-full items-center gap-1 rounded-md border border-borderGlow/60 bg-panel/70 px-2 py-0.5 text-xs text-textMuted hover:border-accent/60 hover:text-accent"
+                >
+                  <span className="truncate">↪ {message.replyTo.username}: {message.replyTo.content}</span>
+                </button>
+              )}
+              {Boolean(message.content) && (
+                <p className={`whitespace-pre-wrap break-words text-sm leading-6 ${message.deletedAt ? 'italic text-textMuted/60' : 'text-text'}`}>
+                  {linkedParts.map((part, index) => {
+                    if (part.type === 'text') {
+                      return <span key={`text-${message.id}-${index}`}>{part.value}</span>;
+                    }
 
-                if (part.inviteCode) {
-                  const serverName = inviteServerNames[part.inviteCode] || inviteServerNameCache.get(part.inviteCode);
-                  return (
-                    <button
-                      key={`invite-${message.id}-${index}`}
-                      type="button"
-                      onClick={() => openInviteDialog(part.inviteCode || '')}
-                      className="mx-0.5 rounded border border-accent/40 bg-accent/10 px-2 py-0.5 text-left text-xs font-medium text-accent hover:border-accent/70"
-                    >
-                      {serverName ? t('invite_inline_server', { server: serverName }) : t('invite_inline_generic')}
-                    </button>
-                  );
-                }
+                    if (part.inviteCode) {
+                      const serverName = inviteServerNames[part.inviteCode] || inviteServerNameCache.get(part.inviteCode);
+                      return (
+                        <button
+                          key={`invite-${message.id}-${index}`}
+                          type="button"
+                          onClick={() => openInviteDialog(part.inviteCode || '')}
+                          className="mx-0.5 rounded border border-accent/40 bg-accent/10 px-2 py-0.5 text-left text-xs font-medium text-accent hover:border-accent/70"
+                        >
+                          {serverName ? t('invite_inline_server', { server: serverName }) : t('invite_inline_generic')}
+                        </button>
+                      );
+                    }
 
-                if (part.messageId) {
-                  const preview = messageLinkPreviews[part.messageId] || messageLinkPreviewCache.get(part.messageId);
-                  if (preview?.kind === 'friend') {
-                    return null;
-                  }
-                  if (!preview) {
+                    if (part.messageId) {
+                      const preview = messageLinkPreviews[part.messageId] || messageLinkPreviewCache.get(part.messageId);
+                      if (preview?.kind === 'friend') {
+                        return null;
+                      }
+                      if (!preview) {
+                        return (
+                          <span key={`message-link-raw-${message.id}-${index}`} className="text-textMuted/80">
+                            {part.url}
+                          </span>
+                        );
+                      }
+
+                      const serverName =
+                        preview.serverName ||
+                        (preview.serverId ? serverNamesById.get(preview.serverId) : undefined) ||
+                        t('server_unknown');
+                      const channelName =
+                        preview.channelName ||
+                        (preview.channelId ? channelNamesById.get(preview.channelId) : undefined) ||
+                        'channel';
+
+                      return (
+                        <button
+                          key={`message-link-${message.id}-${index}`}
+                          type="button"
+                          onClick={() => void resolveMessageLink(part.messageId || '', { animateInCurrentChat: true })}
+                          className="mx-0.5 rounded border border-borderGlow/50 bg-panel/70 px-2 py-0.5 text-xs text-textMuted hover:border-accent/60 hover:text-accent"
+                        >
+                          {`${serverName} > ${channelName} > 💬`}
+                        </button>
+                      );
+                    }
+
                     return (
-                      <span key={`message-link-raw-${message.id}-${index}`} className="text-textMuted/80">
+                      <a
+                        key={`link-${message.id}-${index}`}
+                        href={part.url}
+                        className="underline decoration-accent/60 underline-offset-2 hover:text-accent"
+                        target={part.internal ? '_self' : '_blank'}
+                        rel="noreferrer"
+                      >
                         {part.url}
-                      </span>
+                      </a>
                     );
-                  }
-
-                  const serverName =
-                    preview.serverName ||
-                    (preview.serverId ? serverNamesById.get(preview.serverId) : undefined) ||
-                    t('server_unknown');
-                  const channelName =
-                    preview.channelName ||
-                    (preview.channelId ? channelNamesById.get(preview.channelId) : undefined) ||
-                    'channel';
-
-                  return (
-                    <button
-                      key={`message-link-${message.id}-${index}`}
-                      type="button"
-                      onClick={() => void resolveMessageLink(part.messageId || '', { animateInCurrentChat: true })}
-                      className="mx-0.5 rounded border border-borderGlow/50 bg-panel/70 px-2 py-0.5 text-xs text-textMuted hover:border-accent/60 hover:text-accent"
-                    >
-                      {`${serverName} > ${channelName} > 💬`}
-                    </button>
-                  );
-                }
-
-                return (
-                  <a
-                    key={`link-${message.id}-${index}`}
-                    href={part.url}
-                    className="underline decoration-accent/60 underline-offset-2 hover:text-accent"
-                    target={part.internal ? '_self' : '_blank'}
-                    rel="noreferrer"
-                  >
-                    {part.url}
-                  </a>
-                );
-              })}
-            </p>
+                  })}
+                </p>
+              )}
+              {message.media && (
+                <div className="mt-2 max-w-[420px] rounded-lg border border-borderGlow/70 bg-panel/70 p-2">
+                  {!mediaLoaded && !isPendingUpload ? (
+                    <div className="space-y-2">
+                      <p className="text-xs text-textMuted">Медиа скрыто. Размер: {formatBytes(message.media.sizeBytes)}</p>
+                      <button
+                        type="button"
+                        onClick={() => setMediaLoaded(true)}
+                        className="rounded-md border border-accent/60 bg-accent/10 px-3 py-1 text-xs uppercase tracking-[0.12em] text-accent"
+                      >
+                        Загрузить медиа
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {message.media.mimeType.startsWith('image/') && (
+                        <img src={message.media.url} alt={message.media.fileName} className="max-h-72 w-full rounded object-cover" loading="lazy" />
+                      )}
+                      {message.media.mimeType.startsWith('video/') && (
+                        <video src={message.media.url} controls={!isPendingUpload} className="max-h-72 w-full rounded" preload={autoLoadMedia ? 'metadata' : 'none'} />
+                      )}
+                      {message.media.mimeType.startsWith('audio/') && (
+                        <audio src={message.media.url} controls={!isPendingUpload} className="w-full" preload={autoLoadMedia ? 'metadata' : 'none'} />
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+              {isPendingUpload && (
+                <div className="mt-2 max-w-[420px] rounded-lg border border-borderGlow/70 bg-panel/70 p-2">
+                  <div className="flex items-center justify-between text-xs text-textMuted">
+                    <span>
+                      {message.uploadStatus === 'failed'
+                        ? 'Ошибка отправки медиа'
+                        : `Отправка: ${Math.max(0, Math.min(100, Math.round(message.uploadProgress || 0)))}%`}
+                    </span>
+                    <span>{message.media ? formatBytes(message.media.sizeBytes) : ''}</span>
+                  </div>
+                  <div className="mt-2 h-2 w-full overflow-hidden rounded bg-borderGlow/50">
+                    <div
+                      className={`h-full transition-all ${message.uploadStatus === 'failed' ? 'bg-red-400/80' : 'bg-accent/80'}`}
+                      style={{
+                        width: `${Math.max(2, Math.min(100, Math.round(message.uploadProgress || 0)))}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
-          <div className="mt-1 flex flex-wrap gap-1.5">
+          {!isPendingUpload && <div className="mt-1 flex flex-wrap gap-1.5">
             {message.reactions.map((reaction) => {
               const active = reaction.userIds.includes(currentUserId);
               return (
@@ -356,42 +498,73 @@ export const MessageItem = ({ message, previous, author, isOwn }: Props) => {
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
+          {menuStatus && <p className="mt-1 text-xs text-accent">{menuStatus}</p>}
         </div>
 
-        <div className="flex w-35 justify-end gap-1 rounded-md border border-borderGlow/40 bg-panel/80 px-1 py-0.5 opacity-0 transition group-hover:opacity-100">
-          {chatMode !== 'friend' && (
+      </div>
+
+      {menu.open && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed z-[120] w-56 rounded-lg border border-borderGlow bg-panel p-1.5 shadow-neon"
+          style={{ left: `${menu.x}px`, top: `${menu.y}px` }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {!replyDisabledForCurrentContext && (
             <button
               type="button"
-              onClick={() => {
-                const url = `${window.location.origin}/app/?m=${encodeURIComponent(message.id)}`;
-                void navigator.clipboard.writeText(url);
-              }}
-              className="rounded px-1.5 py-0.5 text-[11px] text-textMuted hover:text-accent"
+              onClick={handleReply}
+              className="w-full rounded-md border border-transparent px-3 py-2 text-left text-sm text-textMuted hover:border-borderGlow hover:bg-panelSoft hover:text-text"
             >
-              {t('link')}
+              Ответить
             </button>
           )}
           {isOwn && !message.deletedAt && (
-            <>
-              <button
-                type="button"
-                onClick={() => setEditing((prev) => !prev)}
-                className="rounded px-1.5 py-0.5 text-[11px] text-textMuted hover:text-accent"
-              >
-                {t('edit')}
-              </button>
-              <button
-                type="button"
-                onClick={() => void deleteMessage(message.id)}
-                className="rounded px-1.5 py-0.5 text-[11px] text-red-300 hover:text-red-200"
-              >
-                {t('del')}
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(true);
+                closeMenu();
+              }}
+              className="w-full rounded-md border border-transparent px-3 py-2 text-left text-sm text-textMuted hover:border-borderGlow hover:bg-panelSoft hover:text-text"
+            >
+              {t('edit')}
+            </button>
           )}
-        </div>
-      </div>
+          {chatMode !== 'friend' && (
+            <button
+              type="button"
+              onClick={() => void copyMessageLink()}
+              className="w-full rounded-md border border-transparent px-3 py-2 text-left text-sm text-textMuted hover:border-borderGlow hover:bg-panelSoft hover:text-text"
+            >
+              Поделиться
+            </button>
+          )}
+          {isOwn && !message.deletedAt && (
+            <button
+              type="button"
+              onClick={() => {
+                void deleteMessage(message.id);
+                closeMenu();
+              }}
+              className="w-full rounded-md border border-transparent px-3 py-2 text-left text-sm text-red-300 hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-200"
+            >
+              {t('del')}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setMenuStatus('Жалобы: coming soon');
+              closeMenu();
+            }}
+            className="w-full rounded-md border border-transparent px-3 py-2 text-left text-sm text-textMuted hover:border-borderGlow hover:bg-panelSoft hover:text-text"
+          >
+            Пожаловаться
+          </button>
+        </div>,
+        document.body
+      )}
     </article>
   );
 };

@@ -30,6 +30,12 @@ app.use(createHttpLoggerMiddleware(logger));
 
 app.use('/public', express.static(path.join(FRONTEND_ROOT, 'public')));
 app.use('/assets', express.static(path.join(FRONTEND_DIST, 'assets')));
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
+app.get('/public/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
 
 app.use('/auth', authRoutes);
 app.use('/api', apiRoutes);

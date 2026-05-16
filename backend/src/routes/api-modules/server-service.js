@@ -1,14 +1,14 @@
 function createServerService({ query, uuidv4 }) {
-  async function createServerWithDefaultChannel({ name, userId }) {
+  async function createServerWithDefaultChannel({ name, userId, iconUrl = null }) {
     const serverId = uuidv4();
     const defaultChannelId = uuidv4();
 
     await query('BEGIN');
     try {
       await query(
-        `INSERT INTO servers (id, name, created_by)
-         VALUES ($1, $2, $3)`,
-        [serverId, name, userId]
+        `INSERT INTO servers (id, name, icon_url, created_by)
+         VALUES ($1, $2, $3, $4)`,
+        [serverId, name, iconUrl, userId]
       );
 
       await query(
@@ -18,8 +18,15 @@ function createServerService({ query, uuidv4 }) {
       );
 
       await query(
-        `INSERT INTO channels (id, server_id, name, description, type, position, created_by)
-         VALUES ($1, $2, 'general', 'Базовый канал', 'text', 0, $3)`,
+        `INSERT INTO server_categories (server_id, name, position, created_by)
+         VALUES ($1, 'Общие', 0, $2)
+         ON CONFLICT (server_id, name) DO NOTHING`,
+        [serverId, userId]
+      );
+
+      await query(
+        `INSERT INTO channels (id, server_id, name, category_name, description, type, position, created_by)
+         VALUES ($1, $2, 'general', 'Общие', 'Базовый канал', 'text', 0, $3)`,
         [defaultChannelId, serverId, userId]
       );
 
@@ -33,6 +40,7 @@ function createServerService({ query, uuidv4 }) {
       return {
         id: serverId,
         name,
+        iconUrl: iconUrl || null,
         role: 'creator',
         createdAt: new Date().toISOString()
       };
@@ -67,6 +75,7 @@ function createServerService({ query, uuidv4 }) {
               si.code,
               si.server_id AS "serverId",
               s.name AS "serverName",
+              s.icon_url AS "serverIconUrl",
               si.target_user_id AS "targetUserId",
               si.invite_type AS "inviteType",
               si.max_uses AS "maxUses",
@@ -85,13 +94,14 @@ function createServerService({ query, uuidv4 }) {
     await query('BEGIN');
     try {
       const inviteResult = await query(
-        `SELECT si.id,
+      `SELECT si.id,
                 si.server_id AS "serverId",
                 si.target_user_id AS "targetUserId",
                 si.max_uses AS "maxUses",
                 si.uses_count AS "usesCount",
                 si.expires_at AS "expiresAt",
-                s.name AS "serverName"
+                s.name AS "serverName",
+                s.icon_url AS "serverIconUrl"
          FROM server_invites si
          JOIN servers s ON s.id = si.server_id
          WHERE si.code = $1
@@ -162,7 +172,8 @@ function createServerService({ query, uuidv4 }) {
         alreadyMember,
         server: {
           id: invite.serverId,
-          name: invite.serverName
+          name: invite.serverName,
+          iconUrl: invite.serverIconUrl || null
         }
       };
     } catch (err) {

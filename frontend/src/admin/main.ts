@@ -1,10 +1,5 @@
 import './style.css';
-import { initClientLogger } from '../shared/clientLogger';
-
-initClientLogger({
-  app: 'admin',
-  endpoint: '/admin/api/client-log'
-});
+import { wsJsonRequest } from '../services/wsRequest';
 
 type AdminRequest = {
   id: string;
@@ -32,6 +27,11 @@ const refreshBtn = byId<HTMLButtonElement>('refresh-btn');
 const logoutBtn = byId<HTMLButtonElement>('logout-btn');
 const loginInput = byId<HTMLInputElement>('admin-login');
 const passwordInput = byId<HTMLInputElement>('admin-password');
+const updatesNotes = byId<HTMLTextAreaElement>('updates-notes');
+const broadcastMessageInput = byId<HTMLTextAreaElement>('broadcast-message');
+const broadcastSendBtn = byId<HTMLButtonElement>('broadcast-send-btn');
+const broadcastStatus = byId<HTMLDivElement>('broadcast-status');
+const UPDATES_KEY = 'admin.updates.notes';
 
 loginForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -43,12 +43,19 @@ refreshBtn.addEventListener('click', () => {
 logoutBtn.addEventListener('click', () => {
   void adminLogout();
 });
+broadcastSendBtn.addEventListener('click', () => {
+  void sendBroadcast();
+});
 
 void checkSession();
+updatesNotes.value = window.localStorage.getItem(UPDATES_KEY) || '';
+updatesNotes.addEventListener('input', () => {
+  window.localStorage.setItem(UPDATES_KEY, updatesNotes.value);
+});
 
 async function checkSession(): Promise<void> {
   try {
-    const response = await fetch('/admin/api/session', { headers: { Accept: 'application/json' } });
+    const response = await wsJsonRequest<{ authenticated?: boolean }>('/admin/api/session', { headers: { Accept: 'application/json' } });
     if (response.ok) {
       showRequestsPanel();
       await loadRequests();
@@ -66,15 +73,14 @@ async function adminLogin(): Promise<void> {
   const password = passwordInput.value;
 
   try {
-    const response = await fetch('/admin/api/login', {
+    const response = await wsJsonRequest<{ error?: string }>('/admin/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ login, password })
     });
 
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
     if (!response.ok) {
-      throw new Error(data.error || `HTTP ${response.status}`);
+      throw new Error(response.error || `HTTP ${response.status}`);
     }
 
     showRequestsPanel();
@@ -85,7 +91,7 @@ async function adminLogin(): Promise<void> {
 }
 
 async function adminLogout(): Promise<void> {
-  await fetch('/admin/api/logout', { method: 'POST' });
+  await wsJsonRequest('/admin/api/logout', { method: 'POST' });
   showLoginPanel();
 }
 
@@ -93,7 +99,7 @@ async function loadRequests(): Promise<void> {
   requestsList.innerHTML = '<div class="info">Загрузка...</div>';
 
   try {
-    const response = await fetch('/admin/api/requests', {
+    const response = await wsJsonRequest<{ requests?: AdminRequest[] }>('/admin/api/requests', {
       headers: { Accept: 'application/json' }
     });
 
@@ -105,11 +111,34 @@ async function loadRequests(): Promise<void> {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const data = (await response.json()) as { requests?: AdminRequest[] };
-    renderRequests(data.requests || []);
+    renderRequests(response.data?.requests || []);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown';
     requestsList.innerHTML = `<div class="error">Ошибка загрузки: ${escapeHtml(message)}</div>`;
+  }
+}
+
+async function sendBroadcast(): Promise<void> {
+  const content = broadcastMessageInput.value.trim();
+  if (!content) {
+    broadcastStatus.textContent = 'Введите текст сообщения';
+    return;
+  }
+
+  broadcastStatus.textContent = 'Отправка...';
+  try {
+    const response = await wsJsonRequest<{ error?: string }>('/admin/api/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ content })
+    });
+    if (!response.ok) {
+      throw new Error(response.error || `HTTP ${response.status}`);
+    }
+    broadcastMessageInput.value = '';
+    broadcastStatus.textContent = 'Сообщение отправлено в Adaptivity';
+  } catch (error) {
+    broadcastStatus.textContent = error instanceof Error ? error.message : 'Ошибка отправки';
   }
 }
 
@@ -152,14 +181,13 @@ function renderRequests(requests: AdminRequest[]): void {
 }
 
 async function moderate(id: string, action: 'approve' | 'reject'): Promise<void> {
-  const response = await fetch(`/admin/api/requests/${encodeURIComponent(id)}/${action}`, {
+  const response = await wsJsonRequest<{ error?: string }>(`/admin/api/requests/${encodeURIComponent(id)}/${action}`, {
     method: 'POST',
     headers: { Accept: 'application/json' }
   });
 
   if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
-    window.alert(data.error || `Ошибка ${response.status}`);
+    window.alert(response.error || `Ошибка ${response.status}`);
     return;
   }
 

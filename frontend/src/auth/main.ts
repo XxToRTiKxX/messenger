@@ -1,15 +1,10 @@
 import './style.css';
-import { initClientLogger } from '../shared/clientLogger';
 import { startMatrixRain } from '../shared/matrixRain';
 import { ui } from './modules/ui';
 import { showError, showStatus } from './modules/status';
 import { initProviders } from './modules/providers';
 import { enterOnboardingMode, submitCredentials, submitProfile } from './modules/onboarding';
-
-initClientLogger({
-  app: 'auth',
-  endpoint: '/api/client-log'
-});
+import { wsJsonRequest } from '../services/wsRequest';
 
 const urlParams = new URLSearchParams(window.location.search);
 const queryError = urlParams.get('error');
@@ -39,6 +34,14 @@ if (onboardingToken) {
   enterOnboardingMode(ui, stage || 'credentials');
 }
 
+ui.localLoginButton.addEventListener('click', () => {
+  showPasswordLoginMode();
+});
+
+ui.backToOauth.addEventListener('click', () => {
+  showOauthMode();
+});
+
 ui.loginButton.addEventListener('click', () => {
   showStatus(ui, 'Перенаправление на Яндекс...');
   ui.loginButton.disabled = true;
@@ -61,21 +64,70 @@ ui.profileForm.addEventListener('submit', (event) => {
   void submitProfile(ui, onboardingToken);
 });
 
+ui.passwordLoginForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void submitPasswordLogin();
+});
+
 async function checkAuthStatus(): Promise<void> {
   try {
-    const response = await fetch('/auth/status', {
-      headers: { Accept: 'application/json' }
-    });
-
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) return;
-
-    const data = (await response.json()) as { authenticated?: boolean; user?: { username?: string } };
+    const response = await wsJsonRequest<{ authenticated?: boolean; user?: { username?: string } }>('/auth/status');
+    if (!response.ok || !response.data) return;
+    const data = response.data;
     if (data.authenticated && data.user?.username) {
       showStatus(ui, `Вы уже вошли как: ${data.user.username}`, 'success');
     }
   } catch {
     // no-op
+  }
+}
+
+function showPasswordLoginMode(): void {
+  ui.oauthBox.classList.add('hidden');
+  ui.passwordLoginForm.classList.remove('hidden');
+  ui.passwordLoginUsername.focus();
+}
+
+function showOauthMode(): void {
+  ui.passwordLoginForm.classList.add('hidden');
+  ui.oauthBox.classList.remove('hidden');
+  ui.localLoginButton.focus();
+}
+
+async function submitPasswordLogin(): Promise<void> {
+  const username = ui.passwordLoginUsername.value.trim();
+  const password = ui.passwordLoginPassword.value;
+  if (!username || !password) {
+    showError(ui, 'Укажите логин и пароль');
+    return;
+  }
+
+  try {
+    showStatus(ui, 'Проверяю логин и пароль...');
+    ui.passwordLoginSubmit.disabled = true;
+
+    const response = await fetch('/auth/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!response.ok) {
+      throw new Error(payload?.error || `HTTP ${response.status}`);
+    }
+
+    showStatus(ui, 'Успешный вход. Перехожу в приложение...', 'success');
+    window.location.href = '/app/';
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Не удалось выполнить вход';
+    showError(ui, message);
+  } finally {
+    ui.passwordLoginSubmit.disabled = false;
   }
 }
 

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Message, User } from '../types/chat';
 import { generateId } from '../utils/helpers';
-import { apiFetch } from '../services/api';
+import { apiFetch, uploadMediaBinary } from '../services/api';
 import {
   channelMessageUpsert,
   dmChannelId,
@@ -13,9 +13,11 @@ import {
   mapServer,
   normalizeReactions,
   parseChannelPayload,
+  readInitialAutoLoadMedia,
   readInitialLocale,
   readInitialTheme,
   upsertUsers,
+  writeAutoLoadMedia,
   writeThemeToCookie
 } from './chatStore/helpers';
 import type {
@@ -31,6 +33,45 @@ import type {
   ServerPayload
 } from './chatStore/types';
 
+const SERVER_CUSTOMIZATION_KEY = 'ui.serverCustomizations.v1';
+
+type ServerCustomization = {
+  name?: string;
+  iconUrl?: string;
+};
+
+const readServerCustomizations = (): Record<string, ServerCustomization> => {
+  try {
+    const raw = window.localStorage.getItem(SERVER_CUSTOMIZATION_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, ServerCustomization>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+};
+
+const writeServerCustomizations = (value: Record<string, ServerCustomization>): void => {
+  window.localStorage.setItem(SERVER_CUSTOMIZATION_KEY, JSON.stringify(value));
+};
+
+const applyServerCustomizations = (servers: ReturnType<typeof mapServer>[]): ReturnType<typeof mapServer>[] => {
+  const overrides = readServerCustomizations();
+  return servers.map((server) => {
+    const override = overrides[server.id];
+    if (!override) return server;
+    const nextName = String(override.name || server.name).trim() || server.name;
+    const nextIconUrl = String(override.iconUrl || '').trim() || server.iconUrl;
+    return {
+      ...server,
+      name: nextName,
+      icon: makeAvatar(nextName),
+      iconUrl: nextIconUrl
+    };
+  });
+};
+
 export const useChatStore = create<ChatState>((set, get) => ({
   profile: null,
   servers: [],
@@ -41,6 +82,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentChannelId: '',
   currentUserId: '',
   currentServerRole: 'member',
+  currentServerRoleLabels: ['member'],
   chatMode: 'server',
   activeFriendChatId: null,
   friends: [],
@@ -58,6 +100,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   locale: readInitialLocale(),
   theme: readInitialTheme(),
   showSettings: false,
+  autoLoadMedia: readInitialAutoLoadMedia(),
+  replyTargetByChannel: {},
   loading: true,
   error: null,
 
@@ -66,7 +110,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const { profile, friendsPayload, serverPayload } = await loadBootstrapPayload();
 
-      const servers = serverPayload.map(mapServer);
+      const servers = applyServerCustomizations(serverPayload.map(mapServer));
       if (servers.length === 0) {
         throw new Error('API не вернуло ни одного сервера для инициализации');
       }
@@ -121,6 +165,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       set({
         currentServerRole: channelPayload.serverRole,
+        currentServerRoleLabels: channelPayload.roleLabels || [channelPayload.serverRole],
         channelsByServer,
         channels: Object.values(channelsByServer).flat(),
         currentChannelId
@@ -155,11 +200,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       let channels = state.channelsByServer[serverId] ?? [];
       let serverRole = state.currentServerRole;
+      let roleLabels = state.currentServerRoleLabels;
 
       if (channels.length === 0) {
         const payload = await apiFetch<ChannelListPayload>(`/api/servers/${encodeURIComponent(serverId)}/channels`);
         channels = payload.channels.map(mapChannel);
         serverRole = payload.serverRole;
+        roleLabels = payload.roleLabels || [payload.serverRole];
 
         const channelsByServer = {
           ...get().channelsByServer,
@@ -169,7 +216,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({
           channelsByServer,
           channels: Object.values(channelsByServer).flat(),
-          currentServerRole: serverRole
+          currentServerRole: serverRole,
+          currentServerRoleLabels: roleLabels
         });
       }
 
@@ -299,9 +347,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (content) => {
+  sendMessage: async (content, mediaId, replyToMessageId) => {
     const trimmed = content.trim();
-    if (!trimmed) return;
+    if (!trimmed && !mediaId) return;
 
     const state = get();
     set({ error: null });
@@ -315,13 +363,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: trimmed })
+            body: JSON.stringify({
+              content: trimmed,
+              mediaId: mediaId || null
+            })
           }
         );
 
         const channelId = dmChannelId(state.activeFriendChatId);
         const message = mapDirectMessage(response.message, state.activeFriendChatId);
         get().upsertMessage({ ...message, channelId });
+        get().clearReplyTarget(channelId);
         return;
       }
 
@@ -333,7 +385,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         body: JSON.stringify({
           serverId: state.currentServerId,
           channelId: state.currentChannelId,
-          content: trimmed
+          content: trimmed,
+          mediaId: mediaId || null,
+          replyToMessageId: replyToMessageId || null
         })
       });
 
@@ -349,13 +403,50 @@ export const useChatStore = create<ChatState>((set, get) => ({
         users: upsertUsers(get().users, [authorUser])
       });
       get().upsertMessage(message);
+      get().clearReplyTarget(state.currentChannelId);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to send message';
       set({ error: message });
     }
   },
 
-  createServer: async (name) => {
+  uploadMedia: async (file, onProgress) => {
+    if (!file) {
+      throw new Error('Media file required');
+    }
+    if (file.size <= 0) {
+      throw new Error('Empty media file');
+    }
+    const maxBytes = 1610612736;
+    if (file.size > maxBytes) {
+      throw new Error('Максимальный размер файла: 1.5 GB');
+    }
+
+    const state = get();
+    if (state.chatMode === 'friend') {
+      if (!state.activeFriendChatId) {
+        throw new Error('Выберите личный чат для загрузки медиа');
+      }
+      const payload = await uploadMediaBinary(file, {
+        mode: 'dm',
+        friendUserId: state.activeFriendChatId
+      }, onProgress);
+      return payload;
+    }
+
+    if (!state.currentServerId || !state.currentChannelId) {
+      throw new Error('Выберите канал перед загрузкой медиа');
+    }
+
+    const payload = await uploadMediaBinary(file, {
+      mode: 'server',
+      serverId: state.currentServerId,
+      channelId: state.currentChannelId
+    }, onProgress);
+    return payload;
+  },
+
+  createServer: async (name, iconUrl) => {
     const trimmed = name.trim();
     if (!trimmed) return;
 
@@ -363,14 +454,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const created = await apiFetch<ServerPayload>('/api/servers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed })
+        body: JSON.stringify({ name: trimmed, iconUrl: iconUrl || null })
       });
 
       const server = mapServer(created);
       set({
         servers: [...get().servers, server]
       });
-
       await get().selectServer(server.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create server';
@@ -378,7 +468,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  createChannel: async (name) => {
+  createChannel: async (name, type = 'text', categoryName = 'Общие') => {
     const trimmed = name.trim();
     const state = get();
     if (!trimmed || !state.currentServerId) return;
@@ -387,7 +477,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await apiFetch<ChannelPayload>(`/api/servers/${encodeURIComponent(state.currentServerId)}/channels`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed })
+        body: JSON.stringify({
+          name: trimmed,
+          type: type === 'voice' ? 'voice' : 'text',
+          categoryName
+        })
       });
 
       const payload = await apiFetch<ChannelListPayload>(`/api/servers/${encodeURIComponent(state.currentServerId)}/channels`);
@@ -399,6 +493,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       set({
         currentServerRole: payload.serverRole,
+        currentServerRoleLabels: payload.roleLabels || [payload.serverRole],
         channelsByServer,
         channels: Object.values(channelsByServer).flat()
       });
@@ -411,6 +506,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const message = error instanceof Error ? error.message : 'Failed to create channel';
       set({ error: message });
     }
+  },
+
+  updateServerLocal: (serverId, patch) => {
+    const id = String(serverId || '').trim();
+    if (!id) return;
+    const namePatch = typeof patch.name === 'string' ? patch.name.trim() : undefined;
+    const iconUrlPatch = typeof patch.iconUrl === 'string' ? patch.iconUrl.trim() : undefined;
+    set((state) => {
+      const nextServers = state.servers.map((server) => {
+        if (server.id !== id) return server;
+        const nextName = namePatch || server.name;
+        return {
+          ...server,
+          name: nextName,
+          icon: makeAvatar(nextName),
+          iconUrl: iconUrlPatch || server.iconUrl
+        };
+      });
+      const stored = readServerCustomizations();
+      const current = stored[id] || {};
+      stored[id] = {
+        ...current,
+        ...(namePatch ? { name: namePatch } : {}),
+        ...(iconUrlPatch ? { iconUrl: iconUrlPatch } : {})
+      };
+      writeServerCustomizations(stored);
+      return { servers: nextServers };
+    });
   },
 
   sendFriendRequest: async (username) => {
@@ -523,6 +646,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...state.unreadByChannel,
             [message.channelId]: isCurrent && atBottom ? 0 : state.unreadByChannel[message.channelId] ?? 0
           }
+    });
+  },
+
+  removeMessageById: (channelId, messageId) => {
+    if (!channelId || !messageId) return;
+    const state = get();
+    set({
+      messagesByChannel: channelMessageUpsert(state.messagesByChannel, channelId, (messages) =>
+        messages.filter((message) => message.id !== messageId)
+      )
     });
   },
 
@@ -826,6 +959,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
   toggleSettings: (value) => {
     set((state) => ({
       showSettings: value ?? !state.showSettings
+    }));
+  },
+
+  setAutoLoadMedia: (value) => {
+    const next = Boolean(value);
+    writeAutoLoadMedia(next);
+    set({ autoLoadMedia: next });
+  },
+
+  setReplyTarget: (channelId, reply) => {
+    const id = String(channelId || '').trim();
+    if (!id) return;
+    set((state) => ({
+      replyTargetByChannel: {
+        ...state.replyTargetByChannel,
+        [id]: reply
+      }
+    }));
+  },
+
+  clearReplyTarget: (channelId) => {
+    const id = String(channelId || '').trim();
+    if (!id) return;
+    set((state) => ({
+      replyTargetByChannel: {
+        ...state.replyTargetByChannel,
+        [id]: null
+      }
     }));
   },
 

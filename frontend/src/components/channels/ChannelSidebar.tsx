@@ -28,9 +28,11 @@ export function ChannelSidebar() {
 
   return (
     <aside className="h-full w-72 border-r border-borderGlow bg-panelSoft/90 p-4 backdrop-blur-sm">
-      <div className="mb-5 flex items-center justify-between">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-textMuted">{inServerMode ? t('channels') : t('friends')}</h2>
-      </div>
+      {!inServerMode && (
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-textMuted">{t('friends')}</h2>
+        </div>
+      )}
 
       <div className="space-y-4">
         {!inServerMode && (

@@ -2,10 +2,48 @@ const { v4: uuidv4 } = require('uuid');
 const createReactionHelpers = require('./reactions');
 
 function registerFriendRoutes(router, deps) {
-  const { authenticateToken, query, logger, shared, broadcastMessage } = deps;
+  const { authenticateToken, query, logger, shared, broadcastMessage, messageCrypto } = deps;
   const { getUserByUsername, areUsersFriends } = shared;
   const { loadDirectMessageReactionsByIds, enrichMessagesWithReactions } = createReactionHelpers(query);
   const DELETED_CONTENT = 'deleted';
+  const mapMedia = (row) => {
+    if (!row?.mediaId) return null;
+    return {
+      id: row.mediaId,
+      fileName: row.mediaName,
+      mimeType: row.mediaMimeType,
+      sizeBytes: Number(row.mediaSize || 0),
+      url: `/api/media/${row.mediaId}`
+    };
+  };
+  const decryptDirectMessage = (row) => {
+    try {
+      return {
+        ...row,
+        media: mapMedia(row),
+        content: messageCrypto.decryptContent(row.content, 'dm', {
+          messageId: row.id,
+          senderId: row.senderId,
+          recipientId: row.recipientId,
+          createdAt: row.timestamp,
+          type: row.deletedAt ? 'dm_deleted' : 'dm_message'
+        })
+      };
+    } catch (error) {
+      logger.warn('Direct message decryption failed, returning placeholder', {
+        messageId: row?.id || null,
+        senderId: row?.senderId || null,
+        recipientId: row?.recipientId || null,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      return {
+        ...row,
+        media: mapMedia(row),
+        content: '[message unavailable]'
+      };
+    }
+  };
 
   router.get('/friends', authenticateToken, async (req, res) => {
     try {
@@ -248,12 +286,17 @@ function registerFriendRoutes(router, deps) {
                 su.username AS "senderUsername",
                 ru.username AS "recipientUsername",
                 dm.content,
+                dm.media_id AS "mediaId",
+                mf.original_name AS "mediaName",
+                mf.mime_type AS "mediaMimeType",
+                mf.original_size AS "mediaSize",
                 dm.created_at AS "timestamp",
                 dm.edited_at AS "editedAt",
                 dm.deleted_at AS "deletedAt"
          FROM direct_messages dm
          JOIN users su ON su.id = dm.sender_id
          JOIN users ru ON ru.id = dm.recipient_id
+         LEFT JOIN media_files mf ON mf.id = dm.media_id
          WHERE (dm.sender_id = $1 AND dm.recipient_id = $2)
             OR (dm.sender_id = $2 AND dm.recipient_id = $1)
          ORDER BY dm.created_at DESC
@@ -261,10 +304,18 @@ function registerFriendRoutes(router, deps) {
         [userId, friendUserId]
       );
 
-      const messages = await enrichMessagesWithReactions(result.rows.reverse(), loadDirectMessageReactionsByIds);
+      const decryptedRows = result.rows.reverse().map(decryptDirectMessage);
+      const messages = await enrichMessagesWithReactions(decryptedRows, loadDirectMessageReactionsByIds);
       return res.json(messages);
     } catch (err) {
       logger.error('Direct messages fetch failed', { error: err.message, userId, friendUserId });
+      if (err && err.code === 'DECRYPTION_FAILED') {
+        logger.warn('Direct messages fetch fallback to empty list due to decryption failure', {
+          userId,
+          friendUserId
+        });
+        return res.json([]);
+      }
       return res.status(500).json({ error: 'Не удалось загрузить личные сообщения' });
     }
   });
@@ -273,9 +324,10 @@ function registerFriendRoutes(router, deps) {
     const userId = req.user.userId;
     const friendUserId = String(req.params.friendUserId || '').trim();
     const content = String(req.body?.content || '').trim();
+    const mediaId = String(req.body?.mediaId || '').trim() || null;
 
-    if (!content) {
-      return res.status(400).json({ error: 'Message content required' });
+    if (!content && !mediaId) {
+      return res.status(400).json({ error: 'Message content or media required' });
     }
     if (content.length > 1000) {
       return res.status(400).json({ error: 'Message too long (max 1000 chars)' });
@@ -287,22 +339,64 @@ function registerFriendRoutes(router, deps) {
         return res.status(403).json({ error: 'Личный чат доступен только с друзьями' });
       }
 
+      let media = null;
+      if (mediaId) {
+        const mediaCheck = await query(
+          `SELECT id AS "mediaId",
+                  original_name AS "mediaName",
+                  mime_type AS "mediaMimeType",
+                  original_size AS "mediaSize"
+           FROM media_files
+           WHERE id = $1
+             AND owner_user_id = $2
+             AND peer_user_id = $3
+             AND is_committed = FALSE
+           LIMIT 1`,
+          [mediaId, userId, friendUserId]
+        );
+        media = mapMedia(mediaCheck.rows[0]);
+        if (!media) {
+          return res.status(400).json({ error: 'Invalid media reference for direct message' });
+        }
+      }
+
       const messageId = uuidv4();
+      const createdAt = new Date().toISOString();
+      const encryptedContent = messageCrypto.encryptContent(content, 'dm', {
+        messageId,
+        senderId: userId,
+        recipientId: friendUserId,
+        createdAt,
+        type: 'dm_message'
+      });
+
       const inserted = await query(
-        `INSERT INTO direct_messages (id, sender_id, recipient_id, content)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO direct_messages (id, sender_id, recipient_id, content, media_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id,
                    sender_id AS "senderId",
                    recipient_id AS "recipientId",
                    content,
+                   media_id AS "mediaId",
                    created_at AS "timestamp",
                    edited_at AS "editedAt",
                    deleted_at AS "deletedAt"`,
-        [messageId, userId, friendUserId, content]
+        [messageId, userId, friendUserId, encryptedContent, mediaId, createdAt]
       );
 
+      if (mediaId) {
+        await query(
+          `UPDATE media_files
+           SET is_committed = TRUE,
+               committed_at = NOW()
+           WHERE id = $1`,
+          [mediaId]
+        );
+      }
+
       const message = {
-        ...inserted.rows[0],
+        ...decryptDirectMessage(inserted.rows[0]),
+        media,
         reactions: []
       };
       broadcastMessage(
@@ -343,12 +437,18 @@ function registerFriendRoutes(router, deps) {
       }
 
       const existing = await query(
-        `SELECT id,
-                sender_id AS "senderId",
-                recipient_id AS "recipientId",
-                deleted_at AS "deletedAt"
-         FROM direct_messages
-         WHERE id = $1
+        `SELECT dm.id,
+                dm.sender_id AS "senderId",
+                dm.recipient_id AS "recipientId",
+                dm.created_at AS "timestamp",
+                dm.deleted_at AS "deletedAt",
+                dm.media_id AS "mediaId",
+                mf.original_name AS "mediaName",
+                mf.mime_type AS "mediaMimeType",
+                mf.original_size AS "mediaSize"
+         FROM direct_messages dm
+         LEFT JOIN media_files mf ON mf.id = dm.media_id
+         WHERE dm.id = $1
          LIMIT 1`,
         [messageId]
       );
@@ -367,6 +467,14 @@ function registerFriendRoutes(router, deps) {
         return res.status(409).json({ error: 'Удаленное сообщение нельзя редактировать' });
       }
 
+      const encryptedContent = messageCrypto.encryptContent(content, 'dm', {
+        messageId,
+        senderId: target.senderId,
+        recipientId: target.recipientId,
+        createdAt: target.timestamp,
+        type: 'dm_message'
+      });
+
       const updated = await query(
         `UPDATE direct_messages
          SET content = $2,
@@ -376,13 +484,17 @@ function registerFriendRoutes(router, deps) {
                    sender_id AS "senderId",
                    recipient_id AS "recipientId",
                    content,
+                   media_id AS "mediaId",
                    created_at AS "timestamp",
                    edited_at AS "editedAt",
                    deleted_at AS "deletedAt"`,
-        [messageId, content]
+        [messageId, encryptedContent]
       );
 
-      const [message] = await enrichMessagesWithReactions(updated.rows, loadDirectMessageReactionsByIds);
+      const [message] = await enrichMessagesWithReactions(
+        updated.rows.map((row) => decryptDirectMessage({ ...row, ...target })),
+        loadDirectMessageReactionsByIds
+      );
       broadcastMessage(
         {
           type: 'direct_message_updated',
@@ -409,11 +521,17 @@ function registerFriendRoutes(router, deps) {
       }
 
       const existing = await query(
-        `SELECT id,
-                sender_id AS "senderId",
-                recipient_id AS "recipientId"
-         FROM direct_messages
-         WHERE id = $1
+        `SELECT dm.id,
+                dm.sender_id AS "senderId",
+                dm.recipient_id AS "recipientId",
+                dm.created_at AS "timestamp",
+                dm.media_id AS "mediaId",
+                mf.original_name AS "mediaName",
+                mf.mime_type AS "mediaMimeType",
+                mf.original_size AS "mediaSize"
+         FROM direct_messages dm
+         LEFT JOIN media_files mf ON mf.id = dm.media_id
+         WHERE dm.id = $1
          LIMIT 1`,
         [messageId]
       );
@@ -429,6 +547,14 @@ function registerFriendRoutes(router, deps) {
         return res.status(403).json({ error: 'Сообщение не относится к этому диалогу' });
       }
 
+      const encryptedDeletedContent = messageCrypto.encryptContent(DELETED_CONTENT, 'dm', {
+        messageId,
+        senderId: target.senderId,
+        recipientId: target.recipientId,
+        createdAt: target.timestamp,
+        type: 'dm_deleted'
+      });
+
       const deleted = await query(
         `UPDATE direct_messages
          SET content = $2,
@@ -438,13 +564,17 @@ function registerFriendRoutes(router, deps) {
                    sender_id AS "senderId",
                    recipient_id AS "recipientId",
                    content,
+                   media_id AS "mediaId",
                    created_at AS "timestamp",
                    edited_at AS "editedAt",
                    deleted_at AS "deletedAt"`,
-        [messageId, DELETED_CONTENT]
+        [messageId, encryptedDeletedContent]
       );
 
-      const [message] = await enrichMessagesWithReactions(deleted.rows, loadDirectMessageReactionsByIds);
+      const [message] = await enrichMessagesWithReactions(
+        deleted.rows.map((row) => decryptDirectMessage({ ...row, ...target })),
+        loadDirectMessageReactionsByIds
+      );
       broadcastMessage(
         {
           type: 'direct_message_deleted',

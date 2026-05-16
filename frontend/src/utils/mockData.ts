@@ -28,15 +28,15 @@ export const users: User[] = [
 ];
 
 export const channels: Channel[] = [
-  { id: 'ch-announcements', serverId: 'srv-zion', name: 'announcements', type: 'text', category: 'INFO' },
-  { id: 'ch-general', serverId: 'srv-zion', name: 'general', type: 'text', category: 'GENERAL' },
-  { id: 'ch-ops', serverId: 'srv-zion', name: 'ops-war-room', type: 'text', category: 'DEV' },
-  { id: 'ch-deploy', serverId: 'srv-zion', name: 'deployments', type: 'text', category: 'DEV' },
-  { id: 'ch-voice-briefing', serverId: 'srv-zion', name: 'briefing-room', type: 'voice', category: 'VOICE' },
-  { id: 'ch-voice-matrix', serverId: 'srv-zion', name: 'matrix-live', type: 'voice', category: 'VOICE' },
-  { id: 'ch-lobby', serverId: 'srv-construct', name: 'lobby', type: 'text', category: 'GENERAL' },
-  { id: 'ch-build', serverId: 'srv-construct', name: 'build-stream', type: 'text', category: 'DEV' },
-  { id: 'ch-voice-lab', serverId: 'srv-construct', name: 'lab-voice', type: 'voice', category: 'VOICE' }
+  { id: 'ch-announcements', serverId: 'srv-zion', name: 'announcements', type: 'text', category: 'INFO', position: 0 },
+  { id: 'ch-general', serverId: 'srv-zion', name: 'general', type: 'text', category: 'GENERAL', position: 1 },
+  { id: 'ch-ops', serverId: 'srv-zion', name: 'ops-war-room', type: 'text', category: 'DEV', position: 2 },
+  { id: 'ch-deploy', serverId: 'srv-zion', name: 'deployments', type: 'text', category: 'DEV', position: 3 },
+  { id: 'ch-voice-briefing', serverId: 'srv-zion', name: 'briefing-room', type: 'voice', category: 'VOICE', position: 4 },
+  { id: 'ch-voice-matrix', serverId: 'srv-zion', name: 'matrix-live', type: 'voice', category: 'VOICE', position: 5 },
+  { id: 'ch-lobby', serverId: 'srv-construct', name: 'lobby', type: 'text', category: 'GENERAL', position: 0 },
+  { id: 'ch-build', serverId: 'srv-construct', name: 'build-stream', type: 'text', category: 'DEV', position: 1 },
+  { id: 'ch-voice-lab', serverId: 'srv-construct', name: 'lab-voice', type: 'voice', category: 'VOICE', position: 2 }
 ];
 
 export const servers: Server[] = [

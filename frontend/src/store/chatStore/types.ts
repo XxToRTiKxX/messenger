@@ -3,6 +3,7 @@ import type {
   ChatMode,
   FriendItem,
   Locale,
+  MediaAttachment,
   Message,
   Reaction,
   Server,
@@ -22,18 +23,23 @@ export interface ServerPayload {
   id: string;
   name: string;
   role?: string;
+  iconUrl?: string;
 }
 
 export interface ChannelPayload {
   id: string;
   serverId: string;
   name: string;
+  categoryName?: string;
   description?: string;
   type: 'text' | 'voice';
+  position?: number;
+  visibleRoles?: string[];
 }
 
 export interface ChannelListPayload {
   serverRole: string;
+  roleLabels?: string[];
   channels: ChannelPayload[];
 }
 
@@ -43,6 +49,12 @@ export interface ApiMessagePayload {
   username: string;
   channelId: string;
   content: string;
+  media?: MediaAttachment | null;
+  replyTo?: {
+    id: string;
+    username: string;
+    content: string;
+  } | null;
   timestamp: string;
   editedAt?: string | null;
   deletedAt?: string | null;
@@ -56,10 +68,15 @@ export interface DirectMessagePayload {
   recipientId: string;
   recipientUsername: string;
   content: string;
+  media?: MediaAttachment | null;
   timestamp: string;
   editedAt?: string | null;
   deletedAt?: string | null;
   reactions?: Reaction[];
+}
+
+export interface MediaUploadPayload {
+  media: MediaAttachment;
 }
 
 export interface ReactionTogglePayload {
@@ -90,6 +107,7 @@ export interface ChatState {
   currentChannelId: string;
   currentUserId: string;
   currentServerRole: string;
+  currentServerRoleLabels: string[];
   chatMode: ChatMode;
   activeFriendChatId: string | null;
   friends: FriendItem[];
@@ -107,6 +125,8 @@ export interface ChatState {
   locale: Locale;
   theme: ThemeSettings;
   showSettings: boolean;
+  autoLoadMedia: boolean;
+  replyTargetByChannel: Record<string, { id: string; username: string; content: string } | null>;
   loading: boolean;
   error: string | null;
   bootstrap: () => Promise<void>;
@@ -114,21 +134,26 @@ export interface ChatState {
   selectServer: (serverId: string) => Promise<void>;
   selectChannel: (channelId: string) => Promise<void>;
   openFriendChat: (friendUserId: string) => Promise<void>;
-  sendMessage: (content: string) => Promise<void>;
-  createServer: (name: string) => Promise<void>;
-  createChannel: (name: string) => Promise<void>;
+  sendMessage: (content: string, mediaId?: string, replyToMessageId?: string | null) => Promise<void>;
+  uploadMedia: (file: File, onProgress?: (progress: number) => void) => Promise<MediaAttachment>;
+  createServer: (name: string, iconUrl?: string) => Promise<void>;
+  createChannel: (name: string, type?: 'text' | 'voice', categoryName?: string) => Promise<void>;
+  updateServerLocal: (serverId: string, patch: { name?: string; iconUrl?: string }) => void;
   sendFriendRequest: (username: string) => Promise<void>;
   respondToFriendRequest: (friendshipId: string, action: 'accept' | 'reject') => Promise<void>;
   refreshFriends: () => Promise<void>;
   setChannelParticipantRole: (userId: string, role: string) => Promise<void>;
   receiveMessage: (message: Message) => void;
   upsertMessage: (message: Message) => void;
+  removeMessageById: (channelId: string, messageId: string) => void;
   updateMessage: (message: Message) => void;
   updateMessageReactions: (channelId: string, messageId: string, reactions: Reaction[]) => void;
   editMessage: (messageId: string, content: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
   resolveMessageLink: (messageId: string, options?: ResolveMessageLinkOptions) => Promise<void>;
+  setReplyTarget: (channelId: string, reply: { id: string; username: string; content: string } | null) => void;
+  clearReplyTarget: (channelId: string) => void;
   openInviteDialog: (inviteCode: string) => void;
   closeInviteDialog: () => void;
   setTyping: (event: TypingEvent) => void;
@@ -138,5 +163,6 @@ export interface ChatState {
   setTheme: (themePatch: Partial<ThemeSettings>) => void;
   setLocale: (locale: Locale) => void;
   toggleSettings: (value?: boolean) => void;
+  setAutoLoadMedia: (value: boolean) => void;
   clearError: () => void;
 }

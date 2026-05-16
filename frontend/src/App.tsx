@@ -15,6 +15,7 @@ import { mapDirectMessage, mapMessage } from './store/chatStore/helpers';
 import type { ApiMessagePayload, DirectMessagePayload, ReactionTogglePayload } from './store/chatStore/types';
 import { clamp } from './utils/helpers';
 import { useI18n } from './i18n';
+import { wsClient } from './services/wsClient';
 
 function App() {
   const currentChannelId = useChatStore((state) => state.currentChannelId);
@@ -82,17 +83,7 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}`);
-
-    ws.onmessage = (event) => {
-      let payload: unknown;
-      try {
-        payload = JSON.parse(String(event.data || '{}'));
-      } catch {
-        return;
-      }
-
+    const unsubscribe = wsClient.subscribe((payload) => {
       if (!payload || typeof payload !== 'object') return;
       const typed = payload as { type?: string };
       if (!typed.type) return;
@@ -112,7 +103,7 @@ function App() {
       }
 
       if (typed.type === 'message_reactions_updated') {
-        const reactionPayload = payload as { channelId?: string; messageId?: string } & ReactionTogglePayload;
+        const reactionPayload = payload as unknown as { channelId?: string; messageId?: string } & ReactionTogglePayload;
         if (!reactionPayload.channelId || !reactionPayload.messageId) return;
         updateMessageReactions(reactionPayload.channelId, reactionPayload.messageId, reactionPayload.reactions ?? []);
         return;
@@ -150,10 +141,14 @@ function App() {
       if (typed.type === 'friends_updated') {
         void refreshFriends();
       }
-    };
+    });
+
+    void wsClient.connect().catch(() => {
+      // apiFetch will retry through websocket RPC.
+    });
 
     return () => {
-      ws.close();
+      unsubscribe();
     };
   }, [currentUserId, refreshFriends, updateMessage, updateMessageReactions, upsertMessage]);
   const typingNames = useMemo(() => {

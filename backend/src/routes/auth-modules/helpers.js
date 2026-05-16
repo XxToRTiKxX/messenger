@@ -55,10 +55,30 @@ function telegramDataIsValid(queryData, config) {
     return false;
   }
 
-  const data = { ...queryData };
-  const incomingHash = data.hash;
+  const incomingHashRaw = queryData.hash;
+  const incomingHash = Array.isArray(incomingHashRaw) ? String(incomingHashRaw[0] || '') : String(incomingHashRaw || '');
   if (!incomingHash) return false;
-  delete data.hash;
+
+  const allowedKeys = [
+    'id',
+    'first_name',
+    'last_name',
+    'username',
+    'photo_url',
+    'auth_date',
+    'allows_write_to_pm'
+  ];
+
+  const data = {};
+  for (const key of allowedKeys) {
+    const rawValue = queryData[key];
+    if (rawValue == null) continue;
+    if (Array.isArray(rawValue)) {
+      data[key] = String(rawValue[0] || '');
+      continue;
+    }
+    data[key] = String(rawValue);
+  }
 
   const dataCheckString = Object.keys(data)
     .sort()

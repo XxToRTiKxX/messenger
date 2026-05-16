@@ -17,6 +17,7 @@ type InviteAcceptResult = {
   server: {
     id: string;
     name: string;
+    iconUrl?: string | null;
   };
 };
 
@@ -63,6 +64,7 @@ export function InviteDialog({ inviteCode, onClose }: Props) {
 
   const currentServerId = acceptResult?.server.id ?? preview?.serverId ?? '';
   const currentServerName = acceptResult?.server.name ?? preview?.serverName ?? t('server_unknown');
+  const currentServerIconUrl = acceptResult?.server.iconUrl || null;
 
   const alreadyMember = useMemo(() => {
     if (acceptResult?.alreadyMember) return true;
@@ -74,7 +76,7 @@ export function InviteDialog({ inviteCode, onClose }: Props) {
 
     if (!servers.some((server) => server.id === currentServerId)) {
       useChatStore.setState((state) => ({
-        servers: [...state.servers, { id: currentServerId, name: currentServerName, icon: makeAvatar(currentServerName), role: 'member' }]
+        servers: [...state.servers, { id: currentServerId, name: currentServerName, icon: makeAvatar(currentServerName), iconUrl: currentServerIconUrl || undefined, role: 'member' }]
       }));
     }
 

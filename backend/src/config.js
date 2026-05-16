@@ -40,6 +40,19 @@ const config = {
     login: process.env.ADMIN_LOGIN || null,
     password: process.env.ADMIN_PASSWORD || null
   },
+  ws: {
+    requireTls: String(process.env.WS_REQUIRE_TLS || (process.env.NODE_ENV === 'production' ? 'true' : 'false')).toLowerCase() === 'true',
+    bootstrapPsk: process.env.WS_BOOTSTRAP_PSK || 'dev-ws-bootstrap-psk'
+  },
+  message: {
+    activeKeyId: process.env.MESSAGE_ENCRYPTION_ACTIVE_KEY_ID || 'v1',
+    encryptionKeys:
+      process.env.MESSAGE_ENCRYPTION_KEYS ||
+      (process.env.MESSAGE_ENCRYPTION_MASTER_KEY ? `v1:${process.env.MESSAGE_ENCRYPTION_MASTER_KEY}` : '') ||
+      (process.env.MESSAGE_ENCRYPTION_KEY ? `v1:${process.env.MESSAGE_ENCRYPTION_KEY}` : ''),
+    migrateOnStart:
+      String(process.env.MESSAGE_ENCRYPTION_MIGRATE_ON_START || 'false').toLowerCase() === 'true'
+  },
   logLevel: process.env.LOG_LEVEL || 'info'
 };
 

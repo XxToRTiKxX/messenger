@@ -10,10 +10,14 @@ const ROLE_POWER = {
   creator: 5
 };
 
-function createShared({ query }) {
+function createShared({ query, config }) {
   function getBaseUrl(req) {
     const proto = (req.get('x-forwarded-proto') || 'https').split(',')[0].trim();
-    const host = req.get('x-forwarded-host') || req.get('host');
+    const configuredDomain = String(config?.domain || '').trim();
+    const configuredHost = configuredDomain.replace(/^https?:\/\//i, '').replace(/\/+$/g, '');
+    const forwardedHost = (req.get('x-forwarded-host') || '').split(',')[0].trim();
+    const requestHost = String(req.get('host') || '').trim();
+    const host = configuredHost && configuredHost !== 'localhost' ? configuredHost : (forwardedHost || requestHost);
     return `${proto}://${host}`;
   }
 
@@ -117,6 +121,22 @@ function createShared({ query }) {
     return accessResult.rows[0].role;
   }
 
+  async function loadUserRoleLabels(serverId, userId) {
+    const serverRole = await ensureUserHasServerAccess(serverId, userId);
+    if (!serverRole) return [];
+    const roleResult = await query(
+      `SELECT sr.name
+       FROM server_member_roles smr
+       JOIN server_roles sr
+         ON sr.id = smr.role_id
+       WHERE smr.server_id = $1
+         AND smr.user_id = $2
+       ORDER BY sr.created_at ASC`,
+      [serverId, userId]
+    );
+    return [...new Set([serverRole, ...roleResult.rows.map((row) => row.name).filter(Boolean)])];
+  }
+
   return {
     VALID_CHANNEL_ROLES,
     ROLE_POWER,
@@ -128,7 +148,8 @@ function createShared({ query }) {
     getUserByUsername,
     areUsersFriends,
     getChannelContext,
-    ensureUserHasServerAccess
+    ensureUserHasServerAccess,
+    loadUserRoleLabels
   };
 }
 

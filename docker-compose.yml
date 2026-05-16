@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=messenger
+      - POSTGRES_USER=messenger
+      - POSTGRES_PASSWORD=messenger
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  app:
+    build: 
+      context: .
+      dockerfile: backend/Dockerfile
+    user: "${UID:-1000}:${GID:-1000}"
+    depends_on:
+      - db
+    ports:
+      - "3002:3002"  # Внутренний Caddy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/.env:/app/.env:ro
+      - ./backend/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend:/app/frontend
+      - /app/node_modules
+    environment:
+      - NODE_ENV=production
+      - PORT=8000
+      - DATABASE_URL=postgresql://messenger:messenger@db:5432/messenger
+    labels:
+      - "proxy=true"
+      - "ndomain=testchat.adaptivity.ru"
+      - "port=3002"
+      - "nginx_proxy=true"
+      - "nginx_domain=testchat.adaptivity.ru"
+      - "nginx_port=3002"  # Порт внутреннего Caddy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

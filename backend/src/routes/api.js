@@ -1,6 +1,7 @@
 const express = require('express');
 const WebSocket = require('ws');
 const { v4: uuidv4 } = require('uuid');
+const config = require('../config');
 const { authenticateToken, optionalAuth } = require('../middleware/auth');
 const {
   query,
@@ -15,13 +16,16 @@ const registerFriendRoutes = require('./api-modules/friends');
 const registerServerRoutes = require('./api-modules/servers');
 const registerChannelRoutes = require('./api-modules/channels');
 const registerMessageRoutes = require('./api-modules/messages');
+const registerMediaRoutes = require('./api-modules/media');
+const { createMessageCrypto } = require('../server-modules/messageCrypto');
 
 const router = express.Router();
 let clients = new Map();
 
 logger.info('API routes initialized');
 
-const shared = createShared({ query });
+const shared = createShared({ query, config });
+const messageCrypto = createMessageCrypto(config, logger);
 
 router.post('/client-log', optionalAuth, (req, res) => {
   const levelRaw = String(req.body?.level || 'info').toLowerCase();
@@ -69,7 +73,8 @@ registerFriendRoutes(router, {
   query,
   logger,
   shared,
-  broadcastMessage
+  broadcastMessage,
+  messageCrypto
 });
 
 registerServerRoutes(router, {
@@ -98,7 +103,17 @@ registerMessageRoutes(router, {
     DEFAULT_SERVER_ID,
     DEFAULT_CHANNEL_ID
   },
-  broadcastMessage
+  broadcastMessage,
+  messageCrypto
+});
+
+registerMediaRoutes(router, {
+  authenticateToken,
+  query,
+  logger,
+  shared,
+  uuidv4,
+  config
 });
 
 module.exports = router;
@@ -113,12 +128,14 @@ function broadcastMessage(eventPayload, options = {}) {
     : [];
   const targetSet = recipientIds.length > 0 ? new Set(recipientIds) : null;
 
-  const messageData = JSON.stringify(eventPayload);
-
-  clients.forEach((ws, userId) => {
+  clients.forEach((userConnections, userId) => {
     if (targetSet && !targetSet.has(userId)) return;
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(messageData);
-    }
+
+    const sockets = userConnections instanceof Set ? userConnections : new Set([userConnections]);
+    sockets.forEach((ws) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (typeof ws.__sendStamped !== 'function') return;
+      ws.__sendStamped(eventPayload);
+    });
   });
 }

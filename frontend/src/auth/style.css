@@ -137,7 +137,9 @@ body::before {
     opacity: 0.8;
 }
 
-.yandex-button {
+.yandex-button,
+.google-button,
+.auth-secondary-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -155,7 +157,9 @@ body::before {
     margin-bottom: 0.85rem;
 }
 
-.yandex-button:hover {
+.yandex-button:hover,
+.google-button:hover,
+.auth-secondary-button:hover {
     background: rgba(8, 38, 20, 0.85);
     transform: translateY(-2px);
     box-shadow: 0 0 20px rgba(95, 255, 145, 0.25);
@@ -176,31 +180,8 @@ body::before {
     fill: currentColor;
 }
 
-.google-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    width: 100%;
-    padding: 16px 24px;
-    background: rgba(7, 30, 16, 0.7);
-    color: #8dffac;
-    border: 1px solid rgba(106, 255, 150, 0.45);
-    border-radius: 12px;
-    font-weight: 600;
-    font-size: 16px;
-    transition: all 0.2s ease;
-    cursor: pointer;
-    margin-bottom: 0.85rem;
-}
-
-.google-button:hover {
-    background: rgba(8, 38, 20, 0.85);
-    transform: translateY(-2px);
-    box-shadow: 0 0 20px rgba(95, 255, 145, 0.25);
-}
-
-.google-button:disabled {
+.google-button:disabled,
+.auth-secondary-button:disabled {
     background: rgba(50, 50, 50, 0.4);
     color: #7b8a7f;
     cursor: not-allowed;
@@ -208,13 +189,65 @@ body::before {
     box-shadow: none;
 }
 
+.auth-secondary-button {
+    background: rgba(7, 20, 12, 0.78);
+    border-color: rgba(106, 255, 150, 0.28);
+    margin-bottom: 0;
+}
+
 .telegram-widget-container {
-    min-height: 44px;
+    min-height: 56px;
+    width: 100%;
+    position: relative;
     display: flex;
-    justify-content: center;
     align-items: center;
-    color: #89d69f;
-    font-size: 0.9rem;
+    justify-content: center;
+    margin-bottom: 0.85rem;
+    background: rgba(7, 30, 16, 0.7);
+    border: 1px solid rgba(106, 255, 150, 0.45);
+    border-radius: 12px;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.telegram-button-shell {
+    position: relative;
+    z-index: 1;
+    font-size: 16px;
+    color: #8dffac;
+    font-weight: 600;
+    pointer-events: none;
+}
+
+.telegram-widget-hitbox {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: hidden;
+    opacity: 0.01;
+    pointer-events: auto;
+}
+
+.telegram-widget-container:hover {
+    background: rgba(8, 38, 20, 0.85);
+    box-shadow: 0 0 20px rgba(95, 255, 145, 0.25);
+}
+
+.telegram-widget-hitbox > * {
+    width: 100% !important;
+    height: 100% !important;
+    display: block !important;
+}
+
+.telegram-widget-hitbox iframe {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    min-height: 56px !important;
+    border: none !important;
+    display: block !important;
+    cursor: pointer !important;
+    pointer-events: auto !important;
 }
 
 .features {
@@ -309,13 +342,15 @@ body::before {
     .local-form input,
     .local-form textarea,
     .google-button,
-    .yandex-button {
+    .yandex-button,
+    .auth-secondary-button {
         min-height: 44px;
         font-size: 16px;
     }
 
     .google-button,
-    .yandex-button {
+    .yandex-button,
+    .auth-secondary-button {
         padding: 12px 16px;
     }
 }

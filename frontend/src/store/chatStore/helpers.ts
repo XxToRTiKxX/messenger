@@ -17,6 +17,8 @@ class BootstrapError extends Error {
 }
 
 const mapCategory = (channel: ChannelPayload): Channel['category'] => {
+  const explicit = String(channel.categoryName || '').trim();
+  if (explicit) return explicit;
   if (channel.type === 'voice') return 'VOICE';
   if (/(ann|news|rules|info)/i.test(channel.name)) return 'INFO';
   if (/(dev|code|tech)/i.test(channel.name)) return 'DEV';
@@ -29,10 +31,18 @@ export const makeAvatar = (name: string): string => {
   return clean.slice(0, 2).toUpperCase();
 };
 
+const normalizeServerName = (name: string): string => {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return 'Server';
+  if (trimmed === 'Main Server') return 'Adaptivity';
+  return trimmed;
+};
+
 export const mapServer = (server: ServerPayload): Server => ({
   id: server.id,
-  name: server.name,
-  icon: makeAvatar(server.name),
+  name: normalizeServerName(server.name),
+  icon: makeAvatar(normalizeServerName(server.name)),
+  iconUrl: server.iconUrl,
   role: server.role
 });
 
@@ -41,7 +51,9 @@ export const mapChannel = (channel: ChannelPayload): Channel => ({
   serverId: channel.serverId,
   name: channel.name,
   type: channel.type,
-  category: mapCategory(channel)
+  category: mapCategory(channel),
+  position: Number.isFinite(Number(channel.position)) ? Number(channel.position) : 0,
+  visibleRoles: Array.isArray(channel.visibleRoles) ? channel.visibleRoles : []
 });
 
 export const normalizeReactions = (reactions: Reaction[] | undefined): Reaction[] => {
@@ -68,6 +80,8 @@ export const mapMessage = (payload: ApiMessagePayload): Message => ({
   channelId: payload.channelId,
   authorId: payload.userId,
   content: payload.content,
+  media: payload.media ?? null,
+  replyTo: payload.replyTo ?? null,
   createdAt: new Date(payload.timestamp).getTime(),
   editedAt: payload.editedAt ? new Date(payload.editedAt).getTime() : undefined,
   deletedAt: payload.deletedAt ? new Date(payload.deletedAt).getTime() : undefined,
@@ -81,6 +95,7 @@ export const mapDirectMessage = (payload: DirectMessagePayload, friendUserId: st
   channelId: dmChannelId(friendUserId),
   authorId: payload.senderId,
   content: payload.content,
+  media: payload.media ?? null,
   createdAt: new Date(payload.timestamp).getTime(),
   editedAt: payload.editedAt ? new Date(payload.editedAt).getTime() : undefined,
   deletedAt: payload.deletedAt ? new Date(payload.deletedAt).getTime() : undefined,
@@ -91,6 +106,17 @@ export const readInitialLocale = (): Locale => {
   const saved = window.localStorage.getItem('ui.locale');
   if (saved === 'ru' || saved === 'en') return saved;
   return navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en';
+};
+
+export const readInitialAutoLoadMedia = (): boolean => {
+  const saved = window.localStorage.getItem('ui.autoLoadMedia');
+  if (saved === '0') return false;
+  if (saved === '1') return true;
+  return true;
+};
+
+export const writeAutoLoadMedia = (value: boolean): void => {
+  window.localStorage.setItem('ui.autoLoadMedia', value ? '1' : '0');
 };
 
 const DEFAULT_THEME: ThemeSettings = {
@@ -232,7 +258,8 @@ const parseServerPayload = (payload: unknown): ServerPayload[] => {
   return items.map((item) => ({
     id: readString(item.id, 'server.id'),
     name: readString(item.name, 'server.name'),
-    role: readOptionalString(item.role)
+    role: readOptionalString(item.role),
+    iconUrl: readOptionalString(item.iconUrl)
   }));
 };
 
@@ -251,13 +278,21 @@ export const parseChannelPayload = (payload: unknown): ChannelListPayload => {
       id: readString(item.id, 'channel.id'),
       serverId: readString(item.serverId, 'channel.serverId'),
       name: readString(item.name, 'channel.name'),
+      categoryName: readOptionalString(item.categoryName),
       description: readOptionalString(item.description),
-      type
+      type,
+      position: typeof item.position === 'number' ? item.position : 0,
+      visibleRoles: Array.isArray(item.visibleRoles)
+        ? item.visibleRoles.filter((value): value is string => typeof value === 'string')
+        : []
     };
   });
 
   return {
     serverRole: readString(payload.serverRole, 'serverRole'),
+    roleLabels: Array.isArray(payload.roleLabels)
+      ? payload.roleLabels.filter((value): value is string => typeof value === 'string')
+      : [],
     channels
   };
 };

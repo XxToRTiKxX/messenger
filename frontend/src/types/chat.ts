@@ -29,11 +29,28 @@ export interface Reaction {
   userIds: string[];
 }
 
+export interface MediaAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  url: string;
+}
+
 export interface Message {
   id: string;
   channelId: string;
   authorId: string;
   content: string;
+  media?: MediaAttachment | null;
+  localOnly?: boolean;
+  uploadProgress?: number;
+  uploadStatus?: 'uploading' | 'failed';
+  replyTo?: {
+    id: string;
+    username: string;
+    content: string;
+  } | null;
   createdAt: number;
   editedAt?: number;
   deletedAt?: number;
@@ -45,13 +62,16 @@ export interface Channel {
   serverId: string;
   name: string;
   type: ChannelType;
-  category: 'INFO' | 'GENERAL' | 'DEV' | 'VOICE';
+  category: string;
+  position: number;
+  visibleRoles?: string[];
 }
 
 export interface Server {
   id: string;
   name: string;
   icon: string;
+  iconUrl?: string;
   channels?: string[];
   role?: string;
 }

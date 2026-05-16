@@ -2,7 +2,6 @@
     encode zstd gzip
 
     route {
-        # API and OAuth must go to backend before static auth/app handlers
         handle /api/* {
             reverse_proxy 127.0.0.1:8000
         }

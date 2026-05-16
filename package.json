@@ -1,0 +1,23 @@
+{
+  "name": "chat-app",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "build:frontend": "npm run build --workspace=frontend",
+    "start:backend": "npm run dev --workspace=backend",
+    "test:messageCrypto": "node --test tests/messageCrypto",
+    "test:backend": "node --test tests/backend tests/messageCrypto",
+    "test:frontend": "npm run test --workspace=frontend",
+    "test:all": "npm run --workspaces=false test:backend && npm run --workspaces=false test:frontend",
+    "clean": "rm -rf node_modules frontend/node_modules backend/node_modules frontend/dist",
+    "reinstall": "npm run clean && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}

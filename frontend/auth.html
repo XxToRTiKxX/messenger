@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Вход</title>
-    <link rel="icon" href="/public/favicon.ico" />
+    <link rel="icon" href="/favicon.ico" />
   </head>
   <body>
     <canvas id="matrix-bg" class="matrix-bg"></canvas>
@@ -31,8 +31,20 @@
             <button type="submit" class="google-button">Отправить на подтверждение</button>
           </form>
 
+          <form id="password-login-form" class="local-form hidden">
+            <h3>Вход по логину и паролю</h3>
+            <input id="password-login-username" type="text" autocomplete="username" placeholder="Логин" required />
+            <input id="password-login-password" type="password" autocomplete="current-password" placeholder="Пароль" required />
+            <button id="password-login-submit" type="submit" class="google-button">Войти</button>
+            <button id="back-to-oauth" type="button" class="auth-secondary-button">Назад к способам входа</button>
+          </form>
+
           <div id="oauth-box">
-            <div class="oauth-divider">Вход только через OAuth</div>
+            <div class="oauth-divider">Выберите способ входа</div>
+            <button id="local-login" class="google-button" type="button">
+              Войти по логину
+            </button>
+
             <button id="yandex-login" class="yandex-button" type="button">
               Войти через Яндекс
             </button>

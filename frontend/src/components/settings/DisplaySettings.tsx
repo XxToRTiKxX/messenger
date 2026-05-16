@@ -10,8 +10,10 @@ export function DisplaySettings() {
   const setTheme = useChatStore((state) => state.setTheme);
   const setLocale = useChatStore((state) => state.setLocale);
   const toggleSettings = useChatStore((state) => state.toggleSettings);
+  const autoLoadMedia = useChatStore((state) => state.autoLoadMedia);
+  const setAutoLoadMedia = useChatStore((state) => state.setAutoLoadMedia);
   const { t } = useI18n();
-  const [section, setSection] = useState<'account' | 'appearance' | 'effects'>('appearance');
+  const [section, setSection] = useState<'account' | 'appearance' | 'effects' | 'data'>('appearance');
 
   useEffect(() => {
     if (!show) return;
@@ -46,12 +48,13 @@ export function DisplaySettings() {
               {[
                 { id: 'appearance', label: t('theme') },
                 { id: 'effects', label: t('effects') },
+                { id: 'data', label: t('data_memory') },
                 { id: 'account', label: t('account') }
               ].map((item) => (
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setSection(item.id as 'account' | 'appearance' | 'effects')}
+                  onClick={() => setSection(item.id as 'account' | 'appearance' | 'effects' | 'data')}
                   className={`w-full rounded-md border px-3 py-2 text-left text-xs uppercase tracking-wider ${
                     section === item.id
                       ? 'border-accent bg-accent/15 text-text'
@@ -158,6 +161,20 @@ export function DisplaySettings() {
                 >
                   {t('logout')}
                 </button>
+              </div>
+            )}
+
+            {section === 'data' && (
+              <div className="space-y-3 text-sm">
+                <h4 className="text-sm font-semibold uppercase tracking-[0.15em] text-text">{t('data_memory')}</h4>
+                <label className="flex items-center justify-between gap-2">
+                  <span>{t('media_autoload')}</span>
+                  <input
+                    type="checkbox"
+                    checked={autoLoadMedia}
+                    onChange={(event) => setAutoLoadMedia(event.target.checked)}
+                  />
+                </label>
               </div>
             )}
           </div>

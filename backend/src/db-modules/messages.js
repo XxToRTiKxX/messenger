@@ -58,6 +58,10 @@ function createMessageSchemaModule({ query, DEFAULT_SERVER_ID, DEFAULT_CHANNEL_I
     await query('ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;');
     await query('ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;');
     await query('ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;');
+    await query('ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_message_id UUID REFERENCES messages(id) ON DELETE SET NULL;');
+    await query('ALTER TABLE direct_messages ADD COLUMN IF NOT EXISTS reply_to_message_id UUID REFERENCES direct_messages(id) ON DELETE SET NULL;');
+    await query('CREATE INDEX IF NOT EXISTS idx_messages_reply_to_message_id ON messages(reply_to_message_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_direct_messages_reply_to_message_id ON direct_messages(reply_to_message_id);');
   }
 
   async function createReactionsSchema() {

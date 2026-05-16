@@ -1,5 +1,6 @@
 import type { AuthUI } from './ui';
 import { showError, showStatus } from './status';
+import { wsJsonRequest } from '../../services/wsRequest';
 
 export function enterOnboardingMode(ui: AuthUI, activeStage: string): void {
   ui.oauthBox.classList.add('hidden');
@@ -23,7 +24,7 @@ export async function submitCredentials(ui: AuthUI, onboardingToken: string | nu
 
   try {
     showStatus(ui, 'Сохраняю логин и пароль...');
-    const response = await fetch('/auth/onboarding/credentials', {
+    const response = await wsJsonRequest<{ error?: string }>('/auth/onboarding/credentials', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -37,9 +38,8 @@ export async function submitCredentials(ui: AuthUI, onboardingToken: string | nu
       })
     });
 
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
     if (!response.ok) {
-      throw new Error(data.error || `HTTP ${response.status}`);
+      throw new Error(response.error || `HTTP ${response.status}`);
     }
 
     showStatus(ui, 'Логин и пароль сохранены. Заполните информацию о себе.', 'success');
@@ -55,7 +55,7 @@ export async function submitProfile(ui: AuthUI, onboardingToken: string | null):
 
   try {
     showStatus(ui, 'Отправляю данные на модерацию...');
-    const response = await fetch('/auth/onboarding/profile', {
+    const response = await wsJsonRequest<{ error?: string }>('/auth/onboarding/profile', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -67,9 +67,8 @@ export async function submitProfile(ui: AuthUI, onboardingToken: string | null):
       })
     });
 
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
     if (!response.ok) {
-      throw new Error(data.error || `HTTP ${response.status}`);
+      throw new Error(response.error || `HTTP ${response.status}`);
     }
 
     window.location.href = '/auth/?pending=1';

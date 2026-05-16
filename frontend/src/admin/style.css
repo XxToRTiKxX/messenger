@@ -83,6 +83,34 @@ button.danger {
   border: 1px solid rgba(126, 255, 166, 0.5);
 }
 
+.updates-panel {
+  margin-top: 16px;
+  padding: 14px;
+}
+
+.broadcast-panel {
+  margin-top: 16px;
+  padding: 14px;
+}
+
+.broadcast-form {
+  display: grid;
+  gap: 8px;
+}
+
+.updates-panel h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.updates-panel textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+}
+
 @media (max-width: 768px) {
   .container {
     margin: 12px auto;

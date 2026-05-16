@@ -1,7 +1,9 @@
 const express = require('express');
+const crypto = require('crypto');
 const config = require('../config');
-const { query } = require('../db');
+const { query, DEFAULT_SERVER_ID, DEFAULT_CHANNEL_ID } = require('../db');
 const logger = require('../utils/logger');
+const { createMessageCrypto } = require('../server-modules/messageCrypto');
 const {
   setAdminCookie,
   clearAdminCookie,
@@ -10,6 +12,8 @@ const {
 } = require('../middleware/adminAuth');
 
 const router = express.Router();
+const messageCrypto = createMessageCrypto(config, logger);
+const ADAPTIVITY_BOT_USERNAME = 'Adaptivity';
 
 router.use((req, res, next) => {
   logger.info('Admin API request', {
@@ -148,6 +152,81 @@ router.post('/requests/:id/reject', requireAdminAuth, async (req, res) => {
   } catch (err) {
     logger.error('Failed to reject request', { error: err.message });
     return res.status(500).json({ error: 'Failed to reject request' });
+  }
+});
+
+router.post('/broadcast', requireAdminAuth, async (req, res) => {
+  try {
+    const content = String(req.body?.content || '').trim();
+    const channelId = String(req.body?.channelId || DEFAULT_CHANNEL_ID).trim() || DEFAULT_CHANNEL_ID;
+    if (!content) {
+      return res.status(400).json({ error: 'Message content required' });
+    }
+    if (content.length > 1500) {
+      return res.status(400).json({ error: 'Message too long (max 1500 chars)' });
+    }
+
+    await query('BEGIN');
+    try {
+      const existingBot = await query(
+        `SELECT id, username
+         FROM users
+         WHERE username = $1
+         ORDER BY created_at ASC
+         LIMIT 1`,
+        [ADAPTIVITY_BOT_USERNAME]
+      );
+      let bot = existingBot.rows[0];
+      if (!bot) {
+        const botResult = await query(
+          `INSERT INTO users (id, username, registration_status, is_approved)
+           VALUES (gen_random_uuid(), $1, 'active', TRUE)
+           RETURNING id, username`,
+          [ADAPTIVITY_BOT_USERNAME]
+        );
+        bot = botResult.rows[0];
+      }
+
+      await query(
+        `INSERT INTO server_participants (server_id, user_id, role)
+         VALUES ($1, $2, 'creator')
+         ON CONFLICT (server_id, user_id) DO NOTHING`,
+        [DEFAULT_SERVER_ID, bot.id]
+      );
+      await query(
+        `INSERT INTO channel_participants (channel_id, user_id, role)
+         VALUES ($1, $2, 'creator')
+         ON CONFLICT (channel_id, user_id) DO NOTHING`,
+        [channelId, bot.id]
+      );
+
+      const messageId = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      const encryptedContent = messageCrypto.encryptContent(content, 'server', {
+        messageId,
+        serverId: DEFAULT_SERVER_ID,
+        channelId,
+        userId: bot.id,
+        createdAt,
+        type: 'server_message'
+      });
+
+      const inserted = await query(
+        `INSERT INTO messages (id, user_id, server_id, channel_id, content, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, user_id AS "userId", server_id AS "serverId", channel_id AS "channelId", created_at AS "createdAt"`,
+        [messageId, bot.id, DEFAULT_SERVER_ID, channelId, encryptedContent, createdAt]
+      );
+
+      await query('COMMIT');
+      return res.json({ success: true, message: inserted.rows[0], author: bot.username });
+    } catch (error) {
+      await query('ROLLBACK');
+      throw error;
+    }
+  } catch (err) {
+    logger.error('Admin broadcast failed', { error: err.message, admin: req.admin?.login || null });
+    return res.status(500).json({ error: 'Failed to broadcast admin message' });
   }
 });
 
